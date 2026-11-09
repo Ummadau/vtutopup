@@ -1,0 +1,232 @@
+{
+  "entities": {
+    "User": {
+      "title": "User",
+      "description": "User account in NAEEM DATA SUB platform",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "name": { "type": "string", "maxLength": 100 },
+        "email": { "type": "string", "format": "email" },
+        "phone": { "type": "string", "maxLength": 20 },
+        "role": { "type": "string", "enum": ["customer", "agent", "reseller", "admin"] },
+        "status": { "type": "string", "enum": ["active", "suspended"] },
+        "isVerified": { "type": "boolean" },
+        "referralCode": { "type": "string", "maxLength": 20 },
+        "referredBy": { "type": "string" },
+        "walletBalance": { "type": "number" },
+        "totalSavings": { "type": "number" },
+        "referralEarnings": { "type": "number" },
+        "totalTransactionsCount": { "type": "number" },
+        "createdAt": { "type": "string" }
+      },
+      "required": ["id", "name", "email", "phone", "role", "walletBalance"]
+    },
+    "Transaction": {
+      "title": "Transaction",
+      "description": "Transaction record for VTU purchase or wallet top-up",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "reference": { "type": "string", "maxLength": 100 },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "userPhone": { "type": "string" },
+        "userRole": { "type": "string", "enum": ["customer", "reseller", "admin"] },
+        "serviceType": { "type": "string" },
+        "network": { "type": "string" },
+        "recipient": { "type": "string" },
+        "planName": { "type": "string" },
+        "amount": { "type": "number" },
+        "providerCost": { "type": "number" },
+        "profit": { "type": "number" },
+        "status": { "type": "string", "enum": ["successful", "pending", "failed", "reversed"] },
+        "token": { "type": "string" },
+        "providerReference": { "type": "string" },
+        "date": { "type": "string" }
+      },
+      "required": ["id", "reference", "userId", "serviceType", "amount", "status", "date"]
+    },
+    "DataPlan": {
+      "title": "DataPlan",
+      "description": "Catalog of network data bundles",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "plan_id": { "type": "string" },
+        "network": { "type": "string", "enum": ["mtn", "airtel", "glo", "9mobile"] },
+        "name": { "type": "string" },
+        "size": { "type": "string" },
+        "validity": { "type": "string" },
+        "planCode": { "type": "string" },
+        "planType": { "type": "string" },
+        "providerCost": { "type": "number" },
+        "customerPrice": { "type": "number" },
+        "resellerPrice": { "type": "number" },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["id", "network", "name", "customerPrice", "resellerPrice", "isActive"]
+    },
+    "AirtimeDiscount": {
+      "title": "AirtimeDiscount",
+      "description": "Network airtime discounts configuration",
+      "type": "object",
+      "properties": {
+        "network": { "type": "string" },
+        "plan_id": { "type": "string" },
+        "customerDiscountPercent": { "type": "number" },
+        "resellerDiscountPercent": { "type": "number" },
+        "providerCostPercent": { "type": "number" },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["network", "customerDiscountPercent", "resellerDiscountPercent"]
+    },
+    "ElectricityDisco": {
+      "title": "ElectricityDisco",
+      "description": "Electricity disco provider configuration",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "plan_id": { "type": "string" },
+        "network_id": { "type": "string" },
+        "name": { "type": "string" },
+        "code": { "type": "string" },
+        "shortName": { "type": "string" },
+        "serviceFee": { "type": "number" },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["id", "name", "code", "serviceFee", "isActive"]
+    },
+    "CablePackage": {
+      "title": "CablePackage",
+      "description": "Cable TV bouquet package configuration",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "plan_id": { "type": "string" },
+        "network_id": { "type": "string" },
+        "provider": { "type": "string" },
+        "name": { "type": "string" },
+        "code": { "type": "string" },
+        "price": { "type": "number" },
+        "providerCost": { "type": "number" },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["id", "provider", "name", "price", "isActive"]
+    },
+    "ExamPin": {
+      "title": "ExamPin",
+      "description": "Examination result checker PIN product",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "plan_id": { "type": "string" },
+        "network_id": { "type": "string" },
+        "exam": { "type": "string" },
+        "name": { "type": "string" },
+        "price": { "type": "number" },
+        "providerCost": { "type": "number" },
+        "stockAvailable": { "type": "number" },
+        "isActive": { "type": "boolean" }
+      },
+      "required": ["id", "exam", "name", "price", "isActive"]
+    },
+    "SupportTicket": {
+      "title": "SupportTicket",
+      "description": "Customer service tickets and disputes",
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "userId": { "type": "string" },
+        "userName": { "type": "string" },
+        "userEmail": { "type": "string" },
+        "subject": { "type": "string" },
+        "category": { "type": "string" },
+        "status": { "type": "string", "enum": ["open", "in_progress", "resolved"] },
+        "priority": { "type": "string", "enum": ["low", "medium", "high"] },
+        "createdAt": { "type": "string" },
+        "updatedAt": { "type": "string" }
+      },
+      "required": ["id", "userId", "subject", "status"]
+    },
+    "SystemSetting": {
+      "title": "SystemSetting",
+      "description": "Global platform configurations",
+      "type": "object",
+      "properties": {
+        "platformName": { "type": "string" },
+        "tagline": { "type": "string" },
+        "supportPhone": { "type": "string" },
+        "supportEmail": { "type": "string" },
+        "supportWhatsapp": { "type": "string" },
+        "minWalletFunding": { "type": "number" },
+        "referralBonusPercent": { "type": "number" },
+        "maintenanceMode": { "type": "boolean" },
+        "demoMode": { "type": "boolean" }
+      },
+      "required": ["platformName", "supportWhatsapp"]
+    },
+    "BillStackConfig": {
+      "title": "BillStackConfig",
+      "description": "BillStack dynamic virtual account creation and payment gateway configuration",
+      "type": "object",
+      "properties": {
+        "secretKey": { "type": "string" },
+        "baseUrl": { "type": "string" },
+        "defaultBanks": { "type": "array" },
+        "isLive": { "type": "boolean" },
+        "webhookSecret": { "type": "string" },
+        "lastTested": { "type": "string" },
+        "lastStatus": { "type": "string" }
+      },
+      "required": ["secretKey", "baseUrl", "isLive"]
+    }
+  },
+  "firestore": {
+    "/users/{userId}": {
+      "schema": { "$ref": "#/entities/User" },
+      "description": "User account documents"
+    },
+    "/transactions/{transactionId}": {
+      "schema": { "$ref": "#/entities/Transaction" },
+      "description": "VTU transactions collection"
+    },
+    "/dataPlans/{planId}": {
+      "schema": { "$ref": "#/entities/DataPlan" },
+      "description": "Data plan products catalog"
+    },
+    "/airtimeDiscounts/{networkId}": {
+      "schema": { "$ref": "#/entities/AirtimeDiscount" },
+      "description": "Airtime discount configurations"
+    },
+    "/electricityDiscos/{discoId}": {
+      "schema": { "$ref": "#/entities/ElectricityDisco" },
+      "description": "Electricity discos catalog"
+    },
+    "/cablePackages/{packageId}": {
+      "schema": { "$ref": "#/entities/CablePackage" },
+      "description": "Cable TV packages catalog"
+    },
+    "/examPins/{pinId}": {
+      "schema": { "$ref": "#/entities/ExamPin" },
+      "description": "Exam PINs catalog"
+    },
+    "/supportTickets/{ticketId}": {
+      "schema": { "$ref": "#/entities/SupportTicket" },
+      "description": "Support tickets and disputes"
+    },
+    "/manualFundingRequests/{requestId}": {
+      "schema": { "$ref": "#/entities/Transaction" },
+      "description": "Manual bank transfer deposit proofs"
+    },
+    "/systemSettings/global": {
+      "schema": { "$ref": "#/entities/SystemSetting" },
+      "description": "Platform global settings"
+    },
+    "/systemSettings/billstack_config": {
+      "schema": { "$ref": "#/entities/BillStackConfig" },
+      "description": "BillStack dynamic virtual account payment gateway configuration"
+    }
+  }
+}

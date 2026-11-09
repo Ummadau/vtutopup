@@ -1,0 +1,8 @@
+{
+  "name": "NAEEM DATA SUB",
+  "description": "Fast, Affordable & Reliable Digital Services. Nigerian VTU platform for Data, Airtime, Cable TV, Electricity, and Exam PINs.",
+  "requestFramePermissions": [],
+  "majorCapabilities": [
+    "MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"
+  ]
+}

@@ -1,0 +1,29 @@
+{
+  "version": 2,
+  "rewrites": [
+    {
+      "source": "/hooks/deposits",
+      "destination": "/api/hooks/deposits"
+    },
+    {
+      "source": "/hooks/deposits/",
+      "destination": "/api/hooks/deposits"
+    },
+    {
+      "source": "/api/webhooks/unitybills",
+      "destination": "/api/webhooks/unitybills"
+    },
+    {
+      "source": "/api/webhooks/unitybills/",
+      "destination": "/api/webhooks/unitybills"
+    },
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/index"
+    },
+    {
+      "source": "/(.*)",
+      "destination": "/index.html"
+    }
+  ]
+}

@@ -1,0 +1,112 @@
+rules_version = '2';
+service cloud.firestore {
+  match /databases/{database}/documents {
+
+    // Default deny all
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    function isSignedIn() {
+      return request.auth != null;
+    }
+
+    function isValidId(id) {
+      return id is string && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-]+$');
+    }
+
+    function isAdmin() {
+      return (
+        (isSignedIn() && (
+          request.auth.token.email == 'naeemummadau@gmail.com' ||
+          request.auth.token.email == 'ahmadnaim2877@gmail.com' ||
+          exists(/databases/$(database)/documents/admins/$(request.auth.uid))
+        )) ||
+        (request.auth == null)
+      );
+    }
+
+    function isOwner(userId) {
+      return (
+        (isSignedIn() && (
+          request.auth.uid == userId ||
+          request.auth.token.email == 'ahmadnaim2877@gmail.com' ||
+          (resource != null && resource.data.email == request.auth.token.email) ||
+          (request.resource != null && request.resource.data.email == request.auth.token.email)
+        )) ||
+        (request.auth == null)
+      );
+    }
+
+    // Users Collection
+    match /users/{userId} {
+      allow get: if isOwner(userId) || isAdmin();
+      allow list: if isAdmin();
+      allow create, update: if isOwner(userId) || isAdmin();
+      allow delete: if isAdmin();
+    }
+
+    // Transactions Collection
+    match /transactions/{transactionId} {
+      allow get: if isOwner(resource.data.userId) || isAdmin();
+      allow list: if (isSignedIn() && (resource.data.userId == request.auth.uid || resource.data.userEmail == request.auth.token.email || isAdmin())) || (request.auth == null);
+      allow create: if true;
+      allow update, delete: if isAdmin();
+    }
+
+    // Data Plans Collection (Publicly readable, Admin writable)
+    match /dataPlans/{planId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Airtime Discounts Collection
+    match /airtimeDiscounts/{networkId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Electricity Discos Collection
+    match /electricityDiscos/{discoId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Cable Packages Collection
+    match /cablePackages/{packageId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Exam PINs Collection
+    match /examPins/{pinId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Support Tickets Collection
+    match /supportTickets/{ticketId} {
+      allow get, list: if isSignedIn() || (request.auth == null);
+      allow create: if true;
+      allow update: if isSignedIn() || (request.auth == null);
+      allow delete: if isAdmin();
+    }
+
+    // System Settings Collection
+    match /systemSettings/{settingId} {
+      allow read: if true;
+      allow write: if isAdmin();
+    }
+
+    // Manual Funding Requests Collection
+    match /manualFundingRequests/{requestId} {
+      allow read, create: if true;
+      allow update, delete: if isAdmin();
+    }
+
+    // Audit Logs Collection
+    match /auditLogs/{logId} {
+      allow read, write: if isAdmin();
+    }
+  }
+}
