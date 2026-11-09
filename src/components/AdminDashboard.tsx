@@ -7,6 +7,7 @@ import {
   TrendingUp,
   Settings,
   AlertTriangle,
+  AlertCircle,
   RotateCcw,
   Search,
   Plus,
@@ -204,6 +205,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [isSavingUnityBills, setIsSavingUnityBills] = useState(false);
   const [isTestingUnityBills, setIsTestingUnityBills] = useState(false);
   const [unityBillsTestResult, setUnityBillsTestResult] = useState<string | null>(null);
+  const [isSimulatingUnityBills, setIsSimulatingUnityBills] = useState(false);
 
   // Firestore Webhook Diagnostic Logs State
   const [webhookLogs, setWebhookLogs] = useState<any[]>([]);
@@ -635,6 +637,53 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setCopiedWebhookUrl(true);
     flashMessage('✓ BillStack Webhook URL copied to clipboard!');
     setTimeout(() => setCopiedWebhookUrl(false), 2500);
+  };
+
+  // Test & Simulate UnityBills Webhook Payload (Exact Production Structure)
+  const handleSimulateUnityBillsWebhook = async () => {
+    setIsSimulatingUnityBills(true);
+    const testReference = `UNITYBILLSNGUMMADAUIBRAHIM_${Date.now()}`;
+    const testPayload = {
+      event: "collection",
+      reference: testReference,
+      virtualAccount: "9819132449",
+      amountReceived: 100,
+      sessionId: `1000042611092011011769837${Math.floor(10000 + Math.random() * 90000)}`,
+      sourceCurrency: "NGN",
+      destinationCurrency: "NGN",
+      status: "successful",
+      sourceAccountNumber: "XXXXXX7241",
+      sourceAccountName: "NAIM UMMADAU HARUNA",
+      sourceBankCode: "",
+      sourceBankName: "OPay Digital Services Limited (OPay)",
+      remarks: "8069417241/9819132449/UNITYBILLSNG/UM",
+      createdAt: Date.now(),
+      updatedAt: Date.now(),
+      settlementDestination: "9819132449"
+    };
+
+    try {
+      const res = await fetch('/api/webhooks/unitybills', {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(testPayload),
+      });
+      const data = await res.json();
+      if (res.ok && (data.success || data.status === 'successful' || data.status === true)) {
+        flashMessage(`✓ UnityBills Webhook Processed! ₦100 credited to account 9819132449 (Ref: ${testReference})`);
+        fetchAllData();
+        fetchWebhookLogs();
+        if (onRefreshUser) onRefreshUser();
+      } else {
+        flashMessage(data.message || data.error || 'Failed to simulate UnityBills webhook');
+      }
+    } catch (err: any) {
+      flashMessage(`Webhook simulation error: ${err.message}`);
+    } finally {
+      setIsSimulatingUnityBills(false);
+    }
   };
 
   // Dynamic Credential Validation
@@ -4768,41 +4817,100 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
             )}
 
             {/* UnityBills Webhook Endpoint Banner */}
-            <div className="p-4 rounded-2xl bg-blue-50/80 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 space-y-2">
+            <div className="p-4 rounded-2xl bg-blue-50/80 dark:bg-blue-950/30 border border-blue-200 dark:border-blue-800 space-y-4">
               <div className="flex items-center justify-between">
                 <div className="flex items-center gap-2">
                   <Globe className="w-4 h-4 text-blue-600 dark:text-blue-400" />
                   <span className="text-xs font-bold text-blue-950 dark:text-blue-200 uppercase tracking-wider">
-                    UnityBills Public Deposit Webhook URL (Bypasses 302 Auth Redirects)
+                    UnityBills Webhook Endpoints
                   </span>
                 </div>
-                <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-200 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-200">
-                  Public 200 OK Rail
+                <div className="flex items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={handleSimulateUnityBillsWebhook}
+                    disabled={isSimulatingUnityBills}
+                    className="px-3 py-1 rounded-xl bg-emerald-600 hover:bg-emerald-700 text-white font-bold text-xs shadow-sm transition flex items-center gap-1.5 cursor-pointer disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3 h-3 ${isSimulatingUnityBills ? 'animate-spin' : ''}`} />
+                    <span>{isSimulatingUnityBills ? 'Simulating...' : 'Test Webhook (₦100)'}</span>
+                  </button>
+                  <span className="px-2 py-0.5 rounded text-[10px] font-bold bg-emerald-200 dark:bg-emerald-900 text-emerald-800 dark:text-emerald-200">
+                    HTTP 200 Ready
+                  </span>
+                </div>
+              </div>
+
+              {/* 302 Explanation Box */}
+              <div className="p-3 rounded-xl bg-amber-50 dark:bg-amber-950/50 border border-amber-200 dark:border-amber-800 text-[11px] text-amber-900 dark:text-amber-200 space-y-1">
+                <p className="font-bold flex items-center gap-1.5 text-amber-950 dark:text-amber-100">
+                  <AlertCircle className="w-3.5 h-3.5 text-amber-600 shrink-0" />
+                  Why did UnityBills show "HTTP Code 302"?
+                </p>
+                <p>
+                  In your screenshot, the URL was set to <code className="font-mono bg-amber-100 dark:bg-amber-900/60 px-1 py-0.5 rounded font-bold text-amber-900 dark:text-amber-200">https://ais-dev-...</code>. Any domain starting with <code className="font-bold">ais-dev-</code> is Google Cloud's private developer workspace that requires developer session cookies. External servers (like UnityBills) receive an <strong>HTTP 302 Found</strong> redirecting to Google Accounts login.
+                </p>
+                <p className="font-semibold text-emerald-700 dark:text-emerald-300">
+                  Fix: Paste your live Vercel production URL below into the UnityBills Webhook URL field.
+                </p>
+              </div>
+
+              {/* Primary Vercel Webhook URL */}
+              <div className="space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-[11px] font-bold text-slate-700 dark:text-slate-300">
+                    1. Vercel Webhook URL (Recommended for UnityBills Dashboard):
+                  </span>
+                  <span className="text-[10px] font-mono text-blue-600 dark:text-blue-400 font-bold">
+                    Root API Function
+                  </span>
+                </div>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    readOnly
+                    value="https://vtutopup.vercel.app/api/webhooks/unitybills"
+                    className="flex-1 px-3 py-2 rounded-xl border border-blue-200 dark:border-blue-800 bg-white dark:bg-slate-900 text-xs font-mono font-bold text-blue-900 dark:text-blue-200 outline-none select-all"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText('https://vtutopup.vercel.app/api/webhooks/unitybills');
+                      flashMessage('✓ Vercel UnityBills Webhook URL copied to clipboard!');
+                    }}
+                    className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-sm transition flex items-center gap-1.5 cursor-pointer shrink-0"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>Copy URL</span>
+                  </button>
+                </div>
+              </div>
+
+              {/* Alternative Deposits Route */}
+              <div className="space-y-1.5">
+                <span className="text-[11px] font-bold text-slate-700 dark:text-slate-300">
+                  2. Alternative Vercel Rewrite URL:
                 </span>
+                <div className="flex items-center gap-2">
+                  <input
+                    type="text"
+                    readOnly
+                    value="https://vtutopup.vercel.app/hooks/deposits"
+                    className="flex-1 px-3 py-2 rounded-xl border border-slate-200 dark:border-slate-800 bg-white dark:bg-slate-900 text-xs font-mono font-bold text-slate-700 dark:text-slate-300 outline-none select-all"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => {
+                      navigator.clipboard.writeText('https://vtutopup.vercel.app/hooks/deposits');
+                      flashMessage('✓ Vercel Deposits URL copied to clipboard!');
+                    }}
+                    className="px-3.5 py-2 rounded-xl bg-slate-700 hover:bg-slate-800 text-white font-bold text-xs shadow-sm transition flex items-center gap-1.5 cursor-pointer shrink-0"
+                  >
+                    <Copy className="w-3.5 h-3.5" />
+                    <span>Copy URL</span>
+                  </button>
+                </div>
               </div>
-              <div className="flex items-center gap-2">
-                <input
-                  type="text"
-                  readOnly
-                  value={`${(typeof window !== 'undefined' ? window.location.origin : 'https://ais-pre-iviwqth7hoxlvljjfdr5dk-637753811837.europe-west3.run.app').replace('ais-dev-', 'ais-pre-')}/hooks/deposits`}
-                  className="flex-1 px-3 py-2 rounded-xl border border-blue-200 dark:border-blue-800 bg-white dark:bg-slate-900 text-xs font-mono font-bold text-blue-900 dark:text-blue-200 outline-none select-all"
-                />
-                <button
-                  type="button"
-                  onClick={() => {
-                    const publicUrl = `${(typeof window !== 'undefined' ? window.location.origin : 'https://ais-pre-iviwqth7hoxlvljjfdr5dk-637753811837.europe-west3.run.app').replace('ais-dev-', 'ais-pre-')}/hooks/deposits`;
-                    navigator.clipboard.writeText(publicUrl);
-                    setUnityBillsTestResult('✓ Public UnityBills Webhook URL (/hooks/deposits) copied to clipboard!');
-                  }}
-                  className="px-3.5 py-2 rounded-xl bg-blue-600 hover:bg-blue-700 text-white font-bold text-xs shadow-sm transition flex items-center gap-1.5 cursor-pointer"
-                >
-                  <Copy className="w-3.5 h-3.5" />
-                  <span>Copy Public Webhook URL</span>
-                </button>
-              </div>
-              <p className="text-[11px] text-slate-500 dark:text-slate-400">
-                <strong>Crucial</strong>: Always use the public <strong><code className="text-blue-600 dark:text-blue-400 font-bold">ais-pre-</code></strong> Shared URL shown above (with <code className="font-bold">/hooks/deposits</code>). Private <code className="text-amber-600 font-bold">ais-dev-</code> preview URLs return <strong>302 Redirect</strong> to Google Login because external servers lack developer login cookies!
-              </p>
             </div>
 
             {/* Firestore Diagnostic Webhook Logs Monitor */}

@@ -30,6 +30,7 @@ import {
   deleteExamPinFromFirestore,
   initializeFirestoreProductCatalog,
   initializeFirestoreData,
+  recordTransactionInFirestore,
 } from './server/vtu-provider.ts';
 import { User, Transaction, DataPlan, SupportTicket, ElectricityDisco, CablePackage, ExamPin, BillStackConfig, VirtualAccount, ManualFundingConfig, ManualFundingRequest } from './src/types/index.ts';
 import {
@@ -219,6 +220,7 @@ const handleEarlyWebhookRequest = async (req: Request, res: Response) => {
 
       matchedUser.walletBalance = balanceAfter;
       db.users.set(matchedUser.id, matchedUser);
+      await recordUserInFirestore(matchedUser).catch(() => {});
 
       // Record in ledger
       db.ledger.push({
@@ -254,6 +256,7 @@ const handleEarlyWebhookRequest = async (req: Request, res: Response) => {
         paymentMethod: `UnityBills (${bankName})`,
       };
       db.transactions.set(txId, tx);
+      await recordTransactionInFirestore(tx).catch(() => {});
 
       db.addNotification({
         userId: matchedUser.id,
@@ -265,7 +268,7 @@ const handleEarlyWebhookRequest = async (req: Request, res: Response) => {
       console.log(`[UnityBills Webhook] Credited ₦${amount} to ${matchedUser.email} (Ref: ${reference})`);
       return res.status(200).json({
         success: true,
-        status: true,
+        status: 'successful',
         message: 'Deposit credited successfully',
         log_id: logData.id,
         data: {

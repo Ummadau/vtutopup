@@ -108,5 +108,10 @@ service cloud.firestore {
     match /auditLogs/{logId} {
       allow read, write: if isAdmin();
     }
+
+    // Webhook Logs Collection (Diagnostic logs for incoming utility and payment webhooks)
+    match /webhook_logs/{logId} {
+      allow read, write: if true;
+    }
   }
 }
