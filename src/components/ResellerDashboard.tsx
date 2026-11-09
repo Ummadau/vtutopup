@@ -33,18 +33,18 @@ export const ResellerDashboard: React.FC<ResellerDashboardProps> = ({
     fetch('/api/reseller/stats', {
       headers: { 'x-user-id': user.id },
     })
-      .then(res => res.json())
+      .then(res => res.ok ? res.json().catch(() => ({})) : {})
       .then(data => {
-        if (data) setStats(data);
+        if (data && Object.keys(data).length > 0) setStats(data);
       })
-      .catch(console.error);
+      .catch(() => {});
 
     fetch('/api/admin/data-plans')
-      .then(res => res.json())
+      .then(res => res.ok ? res.json().catch(() => ({})) : {})
       .then(data => {
-        if (data.plans) setPlans(data.plans);
+        if (data && data.plans) setPlans(data.plans);
       })
-      .catch(console.error);
+      .catch(() => {});
   }, [user]);
 
   const handleCopyCode = () => {

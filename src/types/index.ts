@@ -22,6 +22,7 @@ export interface User {
   bvn?: string;
   virtualAccounts?: VirtualAccount[];
   createdAt: string;
+  updatedAt?: string;
 }
 
 export interface VirtualAccount {

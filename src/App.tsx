@@ -162,7 +162,7 @@ export default function App() {
       const headers = { 'x-user-id': user.id };
       const safeFetch = <T = any,>(url: string, opts?: RequestInit): Promise<T> =>
         fetch(url, opts)
-          .then(r => (r.ok ? r.json() : ({} as T)))
+          .then(r => (r.ok ? r.json().catch(() => ({} as T)) : ({} as T)))
           .catch(() => ({} as T));
 
       const [wRes, tRes, nRes] = await Promise.all([

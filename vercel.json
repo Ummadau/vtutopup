@@ -9,6 +9,14 @@
       "destination": "/api/hooks/deposits"
     },
     {
+      "source": "/api/webhooks/unitybills",
+      "destination": "/api/webhooks/unitybills"
+    },
+    {
+      "source": "/api/(.*)",
+      "destination": "/api/index"
+    },
+    {
       "source": "/((?!api/).*)",
       "destination": "/index.html"
     }

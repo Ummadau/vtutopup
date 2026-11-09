@@ -88,14 +88,14 @@ export const PayBillsModal: React.FC<PayBillsModalProps> = ({
         console.warn('Firestore discos note:', e);
       }
       fetch('/api/services/electricity/discos')
-        .then(res => res.json())
+        .then(res => res.ok ? res.json().catch(() => ({})) : {})
         .then(d => {
-          if (d.discos) {
+          if (d && d.discos) {
             setDiscos(d.discos);
             if (d.discos[0]) setSelectedDiscoId(d.discos[0].id);
           }
         })
-        .catch(console.error);
+        .catch(() => {});
     };
 
     // Load Exam PINs from Firestore with backend fallback
@@ -114,14 +114,14 @@ export const PayBillsModal: React.FC<PayBillsModalProps> = ({
         console.warn('Firestore exam pins note:', e);
       }
       fetch('/api/services/exam/pins')
-        .then(res => res.json())
+        .then(res => res.ok ? res.json().catch(() => ({})) : {})
         .then(d => {
-          if (d.pins) {
+          if (d && d.pins) {
             setExamPins(d.pins);
             if (d.pins[0]) setSelectedExamPinId(d.pins[0].id);
           }
         })
-        .catch(console.error);
+        .catch(() => {});
     };
 
     loadDiscos();
@@ -148,14 +148,14 @@ export const PayBillsModal: React.FC<PayBillsModalProps> = ({
           console.warn('Firestore cable note:', e);
         }
         fetch(`/api/services/cable/packages?provider=${selectedCategory}`)
-          .then(res => res.json())
+          .then(res => res.ok ? res.json().catch(() => ({})) : {})
           .then(d => {
-            if (d.packages) {
+            if (d && d.packages) {
               setCablePackages(d.packages);
               if (d.packages[0]) setSelectedPackageId(d.packages[0].id);
             }
           })
-          .catch(console.error);
+          .catch(() => {});
       };
       loadCable();
     }
@@ -181,8 +181,8 @@ export const PayBillsModal: React.FC<PayBillsModalProps> = ({
           meterType,
         }),
       });
-      const data = await res.json();
-      if (!res.ok) throw new Error(data.error || 'Verification failed');
+      const data = await res.json().catch(() => ({}));
+      if (!res.ok) throw new Error(data?.error || 'Verification failed');
       setVerifiedCustomer({
         name: data.customerName,
         address: data.address,

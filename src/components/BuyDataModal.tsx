@@ -49,8 +49,8 @@ export const BuyDataModal: React.FC<BuyDataModalProps> = ({
     const fetchPlans = async () => {
       try {
         const res = await fetch(`/api/services/data/plans?network=${selectedNetwork}`);
-        const data = await res.json();
-        if (data.plans) {
+        const data = await res.json().catch(() => ({}));
+        if (data && data.plans) {
           setPlans(data.plans);
           if (data.plans.length > 0) {
             const defaultMatch = data.plans.find((p: any) => p.id === 'mtn_dir_5gb') || data.plans[0];

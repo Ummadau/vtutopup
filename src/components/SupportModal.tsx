@@ -38,16 +38,17 @@ export const SupportModal: React.FC<SupportModalProps> = ({
     fetch('/api/support/tickets', {
       headers: { 'x-user-id': user.id },
     })
-      .then(res => res.json())
+      .then(res => res.ok ? res.json().catch(() => ({})) : {})
       .then(d => {
-        if (d.tickets) {
+        if (d && d.tickets) {
           setTickets(d.tickets);
           if (activeTicket) {
             const found = d.tickets.find((t: any) => t.id === activeTicket.id);
             if (found) setActiveTicket(found);
           }
         }
-      });
+      })
+      .catch(() => {});
   };
 
   useEffect(() => {
@@ -76,8 +77,8 @@ export const SupportModal: React.FC<SupportModalProps> = ({
         },
         body: JSON.stringify({ subject, category, priority, message }),
       });
-      const data = await res.json();
-      if (res.ok) {
+      const data = await res.json().catch(() => ({}));
+      if (res.ok && data) {
         setIsCreating(false);
         setActiveTicket(data.ticket);
         fetchTickets();

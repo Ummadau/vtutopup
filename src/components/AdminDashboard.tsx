@@ -366,7 +366,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     try {
       const res = await fetch(url, options);
       if (!res.ok) return fallback;
-      const data = await res.json();
+      const data = await res.json().catch(() => fallback);
       return data ?? fallback;
     } catch (err) {
       console.warn(`SafeFetch error for ${url}:`, err);
@@ -457,7 +457,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         },
         body: JSON.stringify(manualFundingConfig),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (data.success) {
         flashMessage('✓ Manual Bank Account details updated successfully!');
       } else {
@@ -481,7 +481,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         },
         body: JSON.stringify({ requestId }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (data.success) {
         flashMessage(data.message || '✓ Request approved & user wallet credited!');
         fetchManualFundingData();
@@ -516,7 +516,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         },
         body: JSON.stringify({ requestId: rejectTargetReq.requestId, reason: rejectTargetReq.reason }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (data.success) {
         flashMessage('Manual funding request rejected');
         setRejectTargetReq(null);
@@ -559,7 +559,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         },
         body: JSON.stringify(billstackConfig),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (data.success && data.config) {
         setBillstackConfig(data.config);
         flashMessage('BillStack configuration saved successfully! Running verification ping...');
@@ -588,7 +588,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           'x-user-id': currentAdmin.id,
         },
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (data.success) {
         setBillstackTestResult(`✓ Connected! Latency: ${data.latency}ms | ${data.message} | Dedicated Banks: ${billstackConfig.defaultBanks.join(', ')}`);
         flashMessage(`BillStack connection active: ${data.latency}ms`);
@@ -615,7 +615,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         },
         body: JSON.stringify({ amount: 2500, bank: '9PSB' }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok && data.success) {
         setWebhookTestResult(data);
         flashMessage('✓ BillStack Webhook handshake successful: HTTP 200 {"status": true, "message": "successful"}');
@@ -670,7 +670,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         },
         body: JSON.stringify(testPayload),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok && (data.success || data.status === 'successful' || data.status === true)) {
         flashMessage(`✓ UnityBills Webhook Processed! ₦100 credited to account 9819132449 (Ref: ${testReference})`);
         fetchAllData();
@@ -742,7 +742,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         },
         body: JSON.stringify(vtuConfig),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (data.success && data.config) {
         setVtuConfig(data.config);
         flashMessage('VTUNaija API credentials saved! Initiating immediate synchronization test...');
@@ -757,7 +757,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
               'x-user-id': currentAdmin.id,
             },
           });
-          const pingData = await pingRes.json();
+          const pingData = await pingRes.json().catch(() => ({}));
           if (pingData.success) {
             setVtuConfig(prev => ({
               ...prev,
@@ -797,7 +797,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           'x-user-id': currentAdmin.id,
         },
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (data.success) {
         setVtuConfig(prev => ({
           ...prev,
@@ -839,7 +839,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         },
         body: JSON.stringify(newRouting),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (data.success && data.routing) {
         setServiceRouting(data.routing);
         flashMessage('Gateway routing updated successfully!');
@@ -893,7 +893,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         },
         body: JSON.stringify(ncWalletConfig),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (data.success && data.config) {
         setNcWalletConfig(data.config);
         flashMessage('NCwallet configuration saved! Testing connection...');
@@ -920,7 +920,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           'x-user-id': currentAdmin.id,
         },
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (data.success) {
         setNcWalletConfig(prev => ({
           ...prev,
@@ -953,7 +953,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         },
         body: JSON.stringify(unityBillsConfig),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (data.success && data.config) {
         setUnityBillsConfig(data.config);
         flashMessage('UnityBills.ng configuration saved! Testing connection...');
@@ -980,7 +980,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           'x-user-id': currentAdmin.id,
         },
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (data.success) {
         setUnityBillsConfig(prev => ({
           ...prev,
@@ -1017,7 +1017,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
           reason: adjustReason,
         }),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (!res.ok) throw new Error(data.error || 'Failed');
       flashMessage(`Wallet adjusted successfully. New balance: ₦${data.newBalance.toLocaleString()}`);
       setAdjustTargetUser(null);
@@ -1104,7 +1104,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         },
         body: JSON.stringify(editingPlan),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok && data.success) {
         flashMessage(`Data plan "${editingPlan.name}" updated successfully!`);
         setEditingPlan(null);
@@ -1161,7 +1161,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         },
         body: JSON.stringify(editingAirtimeDiscount),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok && data.success) {
         flashMessage(`Airtime configuration for ${editingAirtimeDiscount.network.toUpperCase()} updated successfully!`);
         setEditingAirtimeDiscount(null);
@@ -1207,7 +1207,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         },
         body: JSON.stringify(newDisco),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok && data.success) {
         flashMessage('Electricity disco added successfully');
         setIsAddingDisco(false);
@@ -1233,7 +1233,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         },
         body: JSON.stringify(editingDisco),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok && data.success) {
         flashMessage(`Disco "${editingDisco.name}" updated successfully!`);
         setEditingDisco(null);
@@ -1268,7 +1268,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         },
         body: JSON.stringify(newCable),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok && data.success) {
         flashMessage('Cable package created successfully');
         setIsAddingCable(false);
@@ -1294,7 +1294,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         },
         body: JSON.stringify(editingCable),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok && data.success) {
         flashMessage(`Cable package "${editingCable.name}" updated successfully!`);
         setEditingCable(null);
@@ -1329,7 +1329,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         },
         body: JSON.stringify(newExam),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok && data.success) {
         flashMessage('Exam PIN package created successfully');
         setIsAddingExam(false);
@@ -1355,7 +1355,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         },
         body: JSON.stringify(editingExam),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok && data.success) {
         flashMessage(`Exam PIN "${editingExam.name}" updated successfully!`);
         setEditingExam(null);
@@ -1398,7 +1398,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         },
         body: JSON.stringify(newUserForm),
       });
-      const data = await res.json();
+      const data = await res.json().catch(() => ({}));
       if (res.ok && data.success) {
         flashMessage(data.message || `User "${newUserForm.name}" registered successfully!`);
         setIsAddingUser(false);

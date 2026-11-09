@@ -52,9 +52,9 @@ export const BuyAirtimeModal: React.FC<BuyAirtimeModalProps> = ({
   // Fetch real-time airtime discounts from backend / admin config
   useEffect(() => {
     fetch('/api/services/airtime/discounts')
-      .then(res => res.json())
-      .then(data => {
-        if (data.discounts && Array.isArray(data.discounts)) {
+      .then(res => res.ok ? res.json().catch(() => ({})) : {})
+      .then((data: any) => {
+        if (data && data.discounts && Array.isArray(data.discounts)) {
           const map: Record<string, { customer: number; reseller: number; plan_id?: string }> = {};
           data.discounts.forEach((d: any) => {
             map[d.network] = {
@@ -74,9 +74,9 @@ export const BuyAirtimeModal: React.FC<BuyAirtimeModalProps> = ({
     const clean = phone.replace(/\D/g, '');
     if (clean.length >= 4) {
       fetch(`/api/services/detect-network?phone=${clean}`)
-        .then(res => res.json())
-        .then(data => {
-          if (data.network) {
+        .then(res => res.ok ? res.json().catch(() => ({})) : {})
+        .then((data: any) => {
+          if (data && data.network) {
             setSelectedNetwork(data.network);
           }
         })
