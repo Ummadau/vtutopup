@@ -273,8 +273,8 @@ export default function App() {
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ role }),
       });
-      const data = await res.json();
-      if (data.user) {
+      const data = await res.json().catch(() => ({}));
+      if (data && data.user) {
         setUser(data.user);
         localStorage.setItem('naeem_user_session', JSON.stringify(data.user));
         setCurrentView('app');
