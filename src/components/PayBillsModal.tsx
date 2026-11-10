@@ -5,6 +5,7 @@ import { firestoreDb } from '../lib/firebase.ts';
 import { updateWalletBalance } from '../lib/firebaseService.ts';
 import { PinModal } from './PinModal.tsx';
 import { ElectricityDisco, CablePackage, ExamPin, Transaction } from '../types/index.ts';
+import { FALLBACK_DISCOS, FALLBACK_CABLE_PACKAGES, FALLBACK_EXAM_PINS } from '../constants/defaultCatalogs.ts';
 import { hapticNavClick } from '../lib/haptics.ts';
 
 interface PayBillsModalProps {
@@ -72,56 +73,68 @@ export const PayBillsModal: React.FC<PayBillsModalProps> = ({
   useEffect(() => {
     if (!isOpen) return;
 
-    // Load Electricity Discos from Firestore with backend fallback
+    // Load Electricity Discos from Firestore with backend fallback & embedded catalog
     const loadDiscos = async () => {
+      let list: ElectricityDisco[] = [];
       try {
         const snap = await getDocs(collection(firestoreDb, 'electricityDiscos')).catch(() => null);
         if (snap && !snap.empty) {
-          const list = snap.docs
+          list = snap.docs
             .map(d => ({ ...(d.data() as ElectricityDisco), id: d.id }))
             .filter(d => d.isActive !== false);
-          setDiscos(list);
-          if (list[0]) setSelectedDiscoId(list[0].id);
-          return;
         }
       } catch (e) {
         console.warn('Firestore discos note:', e);
       }
-      fetch('/api/services/electricity/discos')
-        .then(res => res.ok ? res.json().catch(() => ({})) : {})
-        .then((d: any) => {
-          if (d && d.discos) {
-            setDiscos(d.discos);
-            if (d.discos[0]) setSelectedDiscoId(d.discos[0].id);
+
+      if (list.length === 0) {
+        try {
+          const res = await fetch('/api/services/electricity/discos').catch(() => null);
+          if (res && res.ok) {
+            const d = await res.json().catch(() => ({}));
+            if (d && Array.isArray(d.discos) && d.discos.length > 0) list = d.discos;
           }
-        })
-        .catch(() => {});
+        } catch (e) {}
+      }
+
+      if (list.length === 0) {
+        list = FALLBACK_DISCOS;
+      }
+
+      setDiscos(list);
+      if (list[0]) setSelectedDiscoId(list[0].id);
     };
 
-    // Load Exam PINs from Firestore with backend fallback
+    // Load Exam PINs from Firestore with backend fallback & embedded catalog
     const loadExamPins = async () => {
+      let list: ExamPin[] = [];
       try {
         const snap = await getDocs(collection(firestoreDb, 'examPins')).catch(() => null);
         if (snap && !snap.empty) {
-          const list = snap.docs
+          list = snap.docs
             .map(d => ({ ...(d.data() as ExamPin), id: d.id }))
             .filter(d => d.isActive !== false);
-          setExamPins(list);
-          if (list[0]) setSelectedExamPinId(list[0].id);
-          return;
         }
       } catch (e) {
         console.warn('Firestore exam pins note:', e);
       }
-      fetch('/api/services/exam/pins')
-        .then(res => res.ok ? res.json().catch(() => ({})) : {})
-        .then((d: any) => {
-          if (d && d.pins) {
-            setExamPins(d.pins);
-            if (d.pins[0]) setSelectedExamPinId(d.pins[0].id);
+
+      if (list.length === 0) {
+        try {
+          const res = await fetch('/api/services/exam/pins').catch(() => null);
+          if (res && res.ok) {
+            const d = await res.json().catch(() => ({}));
+            if (d && Array.isArray(d.pins) && d.pins.length > 0) list = d.pins;
           }
-        })
-        .catch(() => {});
+        } catch (e) {}
+      }
+
+      if (list.length === 0) {
+        list = FALLBACK_EXAM_PINS;
+      }
+
+      setExamPins(list);
+      if (list[0]) setSelectedExamPinId(list[0].id);
     };
 
     loadDiscos();
@@ -132,30 +145,34 @@ export const PayBillsModal: React.FC<PayBillsModalProps> = ({
   useEffect(() => {
     if (['dstv', 'gotv', 'startimes'].includes(selectedCategory)) {
       const loadCable = async () => {
+        let list: CablePackage[] = [];
         try {
           const snap = await getDocs(collection(firestoreDb, 'cablePackages')).catch(() => null);
           if (snap && !snap.empty) {
-            const list = snap.docs
+            list = snap.docs
               .map(d => ({ ...(d.data() as CablePackage), id: d.id }))
               .filter(d => d.isActive !== false && d.provider?.toLowerCase() === selectedCategory.toLowerCase());
-            if (list.length > 0) {
-              setCablePackages(list);
-              if (list[0]) setSelectedPackageId(list[0].id);
-              return;
-            }
           }
         } catch (e) {
           console.warn('Firestore cable note:', e);
         }
-        fetch(`/api/services/cable/packages?provider=${selectedCategory}`)
-          .then(res => res.ok ? res.json().catch(() => ({})) : {})
-          .then((d: any) => {
-            if (d && d.packages) {
-              setCablePackages(d.packages);
-              if (d.packages[0]) setSelectedPackageId(d.packages[0].id);
+
+        if (list.length === 0) {
+          try {
+            const res = await fetch(`/api/services/cable/packages?provider=${selectedCategory}`).catch(() => null);
+            if (res && res.ok) {
+              const d = await res.json().catch(() => ({}));
+              if (d && Array.isArray(d.packages) && d.packages.length > 0) list = d.packages;
             }
-          })
-          .catch(() => {});
+          } catch (e) {}
+        }
+
+        if (list.length === 0) {
+          list = FALLBACK_CABLE_PACKAGES.filter(c => c.provider.toLowerCase() === selectedCategory.toLowerCase());
+        }
+
+        setCablePackages(list);
+        if (list[0]) setSelectedPackageId(list[0].id);
       };
       loadCable();
     }

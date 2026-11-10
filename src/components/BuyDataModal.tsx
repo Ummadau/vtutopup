@@ -3,6 +3,7 @@ import { ArrowLeft, Check, Phone, ShieldCheck, AlertCircle, Sparkles } from 'luc
 import { NetworkBadge } from './NetworkBadge.tsx';
 import { PinModal } from './PinModal.tsx';
 import { DataPlan, NetworkType, Transaction, UserRole } from '../types/index.ts';
+import { FALLBACK_DATA_PLANS } from '../constants/defaultCatalogs.ts';
 import { updateWalletBalance } from '../lib/firebaseService.ts';
 
 interface BuyDataModalProps {
@@ -47,15 +48,23 @@ export const BuyDataModal: React.FC<BuyDataModalProps> = ({
   useEffect(() => {
     if (!isOpen) return;
     const fetchPlans = async () => {
+      let loadedPlans: DataPlan[] = [];
+
       try {
-        const res = await fetch(`/api/services/data/plans?network=${selectedNetwork}`);
-        const data = await res.json().catch(() => ({}));
-        if (data && data.plans && data.plans.length > 0) {
-          setPlans(data.plans);
-          const defaultMatch = data.plans.find((p: any) => p.id === 'mtn_dir_5gb') || data.plans[0];
-          setSelectedPlanId(defaultMatch.id);
-        } else {
-          // Direct live Firestore query fallback
+        const res = await fetch(`/api/services/data/plans?network=${selectedNetwork}`).catch(() => null);
+        if (res && res.ok) {
+          const data = await res.json().catch(() => ({}));
+          if (data && Array.isArray(data.plans) && data.plans.length > 0) {
+            loadedPlans = data.plans;
+          }
+        }
+      } catch (err) {
+        console.warn('API data plan fetch note:', err);
+      }
+
+      // Direct live Firestore query fallback if API didn't return plans
+      if (loadedPlans.length === 0) {
+        try {
           const { collection, getDocs } = await import('firebase/firestore');
           const { firestoreDb } = await import('../lib/firebase.ts');
           const snap = await getDocs(collection(firestoreDb, 'dataPlans')).catch(() => null);
@@ -63,13 +72,23 @@ export const BuyDataModal: React.FC<BuyDataModalProps> = ({
             const allPlans = snap.docs.map(d => d.data() as DataPlan).filter(p => p.isActive !== false);
             const netPlans = allPlans.filter(p => (p.network || '').toLowerCase() === selectedNetwork.toLowerCase());
             if (netPlans.length > 0) {
-              setPlans(netPlans);
-              setSelectedPlanId(netPlans[0].id);
+              loadedPlans = netPlans;
             }
           }
+        } catch (fsErr) {
+          console.warn('Firestore data plan fetch note:', fsErr);
         }
-      } catch (err) {
-        console.error(err);
+      }
+
+      // Final Embedded Fallback: Guaranteed 21 Nigerian Data Plans
+      if (loadedPlans.length === 0) {
+        loadedPlans = FALLBACK_DATA_PLANS.filter(p => (p.network || '').toLowerCase() === selectedNetwork.toLowerCase());
+      }
+
+      setPlans(loadedPlans);
+      if (loadedPlans.length > 0) {
+        const defaultMatch = loadedPlans.find((p: any) => p.id === 'mtn_dir_5gb') || loadedPlans[0];
+        setSelectedPlanId(defaultMatch.id);
       }
     };
     fetchPlans();
