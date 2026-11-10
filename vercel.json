@@ -1,4 +1,5 @@
 {
+  "version": 2,
   "rewrites": [
     {
       "source": "/hooks/deposits",
@@ -9,15 +10,11 @@
       "destination": "/api/hooks/deposits"
     },
     {
-      "source": "/api/webhooks/unitybills",
+      "source": "/webhooks/unitybills",
       "destination": "/api/webhooks/unitybills"
     },
     {
-      "source": "/api/(.*)",
-      "destination": "/api/index"
-    },
-    {
-      "source": "/((?!api/).*)",
+      "source": "/((?!api/|hooks/|webhooks/).*)",
       "destination": "/index.html"
     }
   ]
