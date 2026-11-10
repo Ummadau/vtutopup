@@ -50,6 +50,7 @@ import { AdminDashboard } from './components/AdminDashboard.tsx';
 import { ToastPopup, ToastMessage } from './components/ToastPopup.tsx';
 import { TransactionStatusBadge } from './components/TransactionStatusBadge.tsx';
 import { hapticSuccess, hapticNavClick, hapticError } from './lib/haptics.ts';
+import { safeFetchJson } from './lib/safeFetch.ts';
 import { translations, Language } from './lib/i18n.ts';
 import { User, Transaction, NotificationItem, VirtualAccount, UserRole } from './types/index.ts';
 import {
@@ -154,43 +155,6 @@ export default function App() {
 
   // Transaction history filter
   const [txFilter, setTxFilter] = useState<'all' | 'successful' | 'pending' | 'failed'>('all');
-
-  // Utility to validate response headers & body before calling .json()
-  const safeFetchJson = async <T = any,>(url: string, opts?: RequestInit): Promise<T> => {
-    try {
-      const res = await fetch(url, opts);
-      const contentType = res.headers.get('content-type') || '';
-      
-      // Explicit check for valid JSON response headers
-      const isJsonHeader = contentType.includes('application/json');
-
-      const text = await res.text();
-      const trimmed = text.trim();
-
-      // Handle HTML error pages or non-JSON responses cleanly
-      if (
-        !isJsonHeader ||
-        trimmed.startsWith('<') ||
-        trimmed.startsWith('The page could not be found') ||
-        trimmed.includes('NOT_FOUND') ||
-        trimmed.startsWith('Internal Server Error')
-      ) {
-        if (!trimmed.startsWith('{') && !trimmed.startsWith('[')) {
-          console.warn(`[safeFetchJson] Non-JSON response for ${url} (${res.status}):`, trimmed.slice(0, 100));
-          return { error: 'Non-JSON response returned from server', success: false, notFound: res.status === 404 } as unknown as T;
-        }
-      }
-
-      if (trimmed.startsWith('{') || trimmed.startsWith('[')) {
-        return JSON.parse(trimmed) as T;
-      }
-
-      return { error: 'Invalid payload structure', success: false } as unknown as T;
-    } catch (err) {
-      console.warn(`[safeFetchJson] Fetch failed for ${url}:`, err);
-      return { error: String(err), success: false } as unknown as T;
-    }
-  };
 
   // Load user data & transactions
   const loadUserData = async () => {
