@@ -2,6 +2,8 @@ import React, { useState, useEffect } from 'react';
 import { ArrowLeft, Check, Phone, ShieldCheck, AlertCircle, Sparkles } from 'lucide-react';
 import { NetworkBadge } from './NetworkBadge.tsx';
 import { PinModal } from './PinModal.tsx';
+import { collection, getDocs } from 'firebase/firestore';
+import { firestoreDb } from '../lib/firebase.ts';
 import { DataPlan, NetworkType, Transaction, UserRole } from '../types/index.ts';
 import { FALLBACK_DATA_PLANS } from '../constants/defaultCatalogs.ts';
 import { updateWalletBalance } from '../lib/firebaseService.ts';
@@ -65,8 +67,6 @@ export const BuyDataModal: React.FC<BuyDataModalProps> = ({
       // Direct live Firestore query fallback if API didn't return plans
       if (loadedPlans.length === 0) {
         try {
-          const { collection, getDocs } = await import('firebase/firestore');
-          const { firestoreDb } = await import('../lib/firebase.ts');
           const snap = await getDocs(collection(firestoreDb, 'dataPlans')).catch(() => null);
           if (snap && !snap.empty) {
             const allPlans = snap.docs.map(d => d.data() as DataPlan).filter(p => p.isActive !== false);

@@ -60,7 +60,7 @@ import {
   ManualFundingRequest
 } from '../types/index.ts';
 import { TransactionStatusBadge } from './TransactionStatusBadge.tsx';
-import { collection, getDocs, doc, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
+import { collection, getDocs, doc, getDoc, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
 import { firestoreDb } from '../lib/firebase.ts';
 
 interface AdminDashboardProps {
@@ -478,7 +478,6 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
       // Direct Firestore live fallback
       try {
-        const { getDoc, getDocs, collection, doc } = await import('firebase/firestore');
         const [cfgSnap, reqSnap] = await Promise.all([
           !cRes.config ? getDoc(doc(firestoreDb, 'settings', 'manual_funding')).catch(() => null) : null,
           (!rRes.requests || rRes.requests.length === 0) ? getDocs(collection(firestoreDb, 'manual_funding_requests')).catch(() => null) : null,

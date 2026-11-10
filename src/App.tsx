@@ -53,6 +53,8 @@ import { hapticSuccess, hapticNavClick, hapticError } from './lib/haptics.ts';
 import { safeFetchJson } from './lib/safeFetch.ts';
 import { translations, Language } from './lib/i18n.ts';
 import { User, Transaction, NotificationItem, VirtualAccount, UserRole } from './types/index.ts';
+import { collection, getDocs, query, where, doc, getDoc } from 'firebase/firestore';
+import { firestoreDb } from './lib/firebase.ts';
 import {
   syncTransactionToFirestore,
   syncUserToFirestore,
@@ -185,9 +187,6 @@ export default function App() {
 
       // Live Firestore synchronization for seamless Vercel & AI Studio data sharing
       try {
-        const { collection, getDocs, query, where, doc, getDoc } = await import('firebase/firestore');
-        const { firestoreDb } = await import('./lib/firebase.ts');
-
         // Fetch user's latest balance and virtual accounts directly from Firestore
         const userDocRef = doc(firestoreDb, 'users', user.id);
         const userSnap = await getDoc(userDocRef).catch(() => null);

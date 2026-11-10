@@ -1,5 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ArrowLeft, Phone, AlertCircle, Sparkles, ShieldCheck } from 'lucide-react';
+import { collection, getDocs } from 'firebase/firestore';
+import { firestoreDb } from '../lib/firebase.ts';
 import { NetworkBadge } from './NetworkBadge.tsx';
 import { PinModal } from './PinModal.tsx';
 import { NetworkType, Transaction, UserRole } from '../types/index.ts';
@@ -72,8 +74,6 @@ export const BuyAirtimeModal: React.FC<BuyAirtimeModalProps> = ({
 
       if (!loaded) {
         try {
-          const { collection, getDocs } = await import('firebase/firestore');
-          const { firestoreDb } = await import('../lib/firebase.ts');
           const snap = await getDocs(collection(firestoreDb, 'airtimeDiscounts')).catch(() => null);
           if (snap && !snap.empty) {
             const map: Record<string, { customer: number; reseller: number; plan_id?: string }> = {};
