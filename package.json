@@ -35,5 +35,8 @@
     "tsx": "^4.21.0",
     "typescript": "^7.0.2",
     "@types/express": "^4.17.21"
+  },
+  "optionalDependencies": {
+    "@esbuild/linux-x64": "^0.28.2"
   }
 }
