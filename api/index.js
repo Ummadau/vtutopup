@@ -11,6 +11,16 @@ import generateVirtualAccountHandler from './wallet/virtual-account/generate.js'
 import getVirtualAccountHandler from './wallet/virtual-account.js';
 import manualFundConfigHandler from './wallet/manual-fund/config.js';
 import manualFundSubmitHandler from './wallet/manual-fund/submit.js';
+import {
+  handleDataPlans,
+  handleAirtimeDiscounts,
+  handleDetectNetwork,
+  handleElectricityDiscos,
+  handleCablePackages,
+  handleExamPins,
+  handleSettings,
+  handleWalletSummary,
+} from './services/catalog.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -41,8 +51,26 @@ export default async function handler(req, res) {
   if (url.includes('/wallet/virtual-account')) return getVirtualAccountHandler(req, res);
   if (url.includes('/wallet/manual-fund/config')) return manualFundConfigHandler(req, res);
   if (url.includes('/wallet/manual-fund/submit')) return manualFundSubmitHandler(req, res);
+  if (url.includes('/wallet/summary')) return handleWalletSummary(req, res);
 
-  // 4. Default Safe JSON fallback for any unhandled endpoint
+  // 4. Product Services & Catalogs
+  if (url.includes('/services/data/plans')) return handleDataPlans(req, res);
+  if (url.includes('/services/airtime/discounts')) return handleAirtimeDiscounts(req, res);
+  if (url.includes('/services/detect-network')) return handleDetectNetwork(req, res);
+  if (url.includes('/services/electricity/discos')) return handleElectricityDiscos(req, res);
+  if (url.includes('/services/cable/packages')) return handleCablePackages(req, res);
+  if (url.includes('/services/exam/pins')) return handleExamPins(req, res);
+  if (url.includes('/settings')) return handleSettings(req, res);
+
+  // 5. Activity data endpoints (transactions, notifications)
+  if (url.includes('/transactions')) {
+    return res.status(200).json({ success: true, transactions: [] });
+  }
+  if (url.includes('/notifications')) {
+    return res.status(200).json({ success: true, notifications: [] });
+  }
+
+  // 6. Default Safe JSON fallback for any unhandled endpoint
   return res.status(200).json({
     success: true,
     status: 'active',

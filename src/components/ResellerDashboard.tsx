@@ -34,14 +34,14 @@ export const ResellerDashboard: React.FC<ResellerDashboardProps> = ({
       headers: { 'x-user-id': user.id },
     })
       .then(res => res.ok ? res.json().catch(() => ({})) : {})
-      .then(data => {
+      .then((data: any) => {
         if (data && Object.keys(data).length > 0) setStats(data);
       })
       .catch(() => {});
 
     fetch('/api/admin/data-plans')
       .then(res => res.ok ? res.json().catch(() => ({})) : {})
-      .then(data => {
+      .then((data: any) => {
         if (data && data.plans) setPlans(data.plans);
       })
       .catch(() => {});

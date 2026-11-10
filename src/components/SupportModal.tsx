@@ -39,7 +39,7 @@ export const SupportModal: React.FC<SupportModalProps> = ({
       headers: { 'x-user-id': user.id },
     })
       .then(res => res.ok ? res.json().catch(() => ({})) : {})
-      .then(d => {
+      .then((d: any) => {
         if (d && d.tickets) {
           setTickets(d.tickets);
           if (activeTicket) {

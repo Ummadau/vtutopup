@@ -89,7 +89,7 @@ export const PayBillsModal: React.FC<PayBillsModalProps> = ({
       }
       fetch('/api/services/electricity/discos')
         .then(res => res.ok ? res.json().catch(() => ({})) : {})
-        .then(d => {
+        .then((d: any) => {
           if (d && d.discos) {
             setDiscos(d.discos);
             if (d.discos[0]) setSelectedDiscoId(d.discos[0].id);
@@ -115,7 +115,7 @@ export const PayBillsModal: React.FC<PayBillsModalProps> = ({
       }
       fetch('/api/services/exam/pins')
         .then(res => res.ok ? res.json().catch(() => ({})) : {})
-        .then(d => {
+        .then((d: any) => {
           if (d && d.pins) {
             setExamPins(d.pins);
             if (d.pins[0]) setSelectedExamPinId(d.pins[0].id);
@@ -149,7 +149,7 @@ export const PayBillsModal: React.FC<PayBillsModalProps> = ({
         }
         fetch(`/api/services/cable/packages?provider=${selectedCategory}`)
           .then(res => res.ok ? res.json().catch(() => ({})) : {})
-          .then(d => {
+          .then((d: any) => {
             if (d && d.packages) {
               setCablePackages(d.packages);
               if (d.packages[0]) setSelectedPackageId(d.packages[0].id);
