@@ -6,7 +6,7 @@
       "destination": "/api/index.js"
     },
     {
-      "source": "/hooks/deposits/:match*",
+      "source": "/hooks/deposits/(.*)",
       "destination": "/api/index.js"
     },
     {
@@ -14,7 +14,7 @@
       "destination": "/api/index.js"
     },
     {
-      "source": "/api/:match*",
+      "source": "/api/(.*)",
       "destination": "/api/index.js"
     },
     {
