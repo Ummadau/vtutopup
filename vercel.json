@@ -3,15 +3,19 @@
   "rewrites": [
     {
       "source": "/hooks/deposits",
-      "destination": "/api/hooks/deposits"
+      "destination": "/api/index.js"
     },
     {
-      "source": "/hooks/deposits/(.*)",
-      "destination": "/api/hooks/deposits"
+      "source": "/hooks/deposits/:match*",
+      "destination": "/api/index.js"
     },
     {
       "source": "/webhooks/unitybills",
-      "destination": "/api/webhooks/unitybills"
+      "destination": "/api/index.js"
+    },
+    {
+      "source": "/api/:match*",
+      "destination": "/api/index.js"
     },
     {
       "source": "/((?!api/|hooks/|webhooks/).*)",
