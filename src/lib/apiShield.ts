@@ -11,7 +11,14 @@ if (typeof window !== 'undefined' && typeof Response !== 'undefined' && Response
 
     Response.prototype.json = async function <T = any>(): Promise<T> {
       try {
-        const text = await this.text();
+        let text = '';
+        try {
+          const cloned = this.clone();
+          text = await cloned.text();
+        } catch {
+          // If clone fails, fallback to original json method safely
+          return originalJson.call(this);
+        }
 
         if (!text || text.trim() === '') {
           return ({} as T);
