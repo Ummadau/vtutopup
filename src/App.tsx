@@ -182,8 +182,47 @@ export default function App() {
         if (wRes.virtualAccounts) setVirtualAccounts(wRes.virtualAccounts);
       }
 
-      if (tRes.transactions) {
+      if (tRes && tRes.transactions && tRes.transactions.length > 0) {
         setTransactions(tRes.transactions);
+      }
+
+      // Live Firestore synchronization for seamless Vercel & AI Studio data sharing
+      try {
+        const { collection, getDocs, query, where, doc, getDoc } = await import('firebase/firestore');
+        const { firestoreDb } = await import('./lib/firebase.ts');
+
+        // Fetch user's latest balance and virtual accounts directly from Firestore
+        const userDocRef = doc(firestoreDb, 'users', user.id);
+        const userSnap = await getDoc(userDocRef).catch(() => null);
+        if (userSnap && userSnap.exists()) {
+          const liveUser = userSnap.data() as User;
+          setUser(prev => ({
+            ...prev,
+            walletBalance: liveUser.walletBalance !== undefined ? liveUser.walletBalance : prev.walletBalance,
+            totalSavings: liveUser.totalSavings !== undefined ? liveUser.totalSavings : prev.totalSavings,
+            referralEarnings: liveUser.referralEarnings !== undefined ? liveUser.referralEarnings : prev.referralEarnings,
+            totalTransactionsCount: liveUser.totalTransactionsCount !== undefined ? liveUser.totalTransactionsCount : prev.totalTransactionsCount,
+            role: liveUser.role || prev.role,
+            virtualAccounts: liveUser.virtualAccounts || prev.virtualAccounts,
+          }));
+          if (liveUser.virtualAccounts && liveUser.virtualAccounts.length > 0) {
+            setVirtualAccounts(liveUser.virtualAccounts);
+          }
+        }
+
+        // Fetch transactions from Firestore if empty or on reload
+        const txQuery = user.role === 'admin'
+          ? collection(firestoreDb, 'transactions')
+          : query(collection(firestoreDb, 'transactions'), where('userId', '==', user.id));
+
+        const snap = await getDocs(txQuery).catch(() => null);
+        if (snap && !snap.empty) {
+          const liveList = snap.docs.map(d => d.data() as Transaction);
+          liveList.sort((a, b) => new Date(b.date || (b as any).createdAt || 0).getTime() - new Date(a.date || (a as any).createdAt || 0).getTime());
+          setTransactions(liveList);
+        }
+      } catch (fsErr) {
+        console.warn('Live Firestore data synchronization note:', fsErr);
       }
 
       if (nRes.notifications) {

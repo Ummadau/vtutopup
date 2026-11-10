@@ -151,6 +151,7 @@ export interface Transaction {
   date: string;
   failureReason?: string;
   paymentMethod?: string;
+  description?: string;
 }
 
 export interface WalletLedgerEntry {

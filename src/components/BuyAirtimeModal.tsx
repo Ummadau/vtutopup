@@ -49,12 +49,14 @@ export const BuyAirtimeModal: React.FC<BuyAirtimeModalProps> = ({
     '9mobile': { customer: 2.0, reseller: 3.5, plan_id: '3' },
   });
 
-  // Fetch real-time airtime discounts from backend / admin config
+  // Fetch real-time airtime discounts from backend / Firestore admin config
   useEffect(() => {
-    fetch('/api/services/airtime/discounts')
-      .then(res => res.ok ? res.json().catch(() => ({})) : {})
-      .then((data: any) => {
-        if (data && data.discounts && Array.isArray(data.discounts)) {
+    const loadDiscounts = async () => {
+      let loaded = false;
+      try {
+        const res = await fetch('/api/services/airtime/discounts');
+        const data = await res.json().catch(() => ({}));
+        if (data && data.discounts && Array.isArray(data.discounts) && data.discounts.length > 0) {
           const map: Record<string, { customer: number; reseller: number; plan_id?: string }> = {};
           data.discounts.forEach((d: any) => {
             map[d.network] = {
@@ -64,9 +66,33 @@ export const BuyAirtimeModal: React.FC<BuyAirtimeModalProps> = ({
             };
           });
           setAirtimeDiscounts(prev => ({ ...prev, ...map }));
+          loaded = true;
         }
-      })
-      .catch(() => {});
+      } catch {}
+
+      if (!loaded) {
+        try {
+          const { collection, getDocs } = await import('firebase/firestore');
+          const { firestoreDb } = await import('../lib/firebase.ts');
+          const snap = await getDocs(collection(firestoreDb, 'airtimeDiscounts')).catch(() => null);
+          if (snap && !snap.empty) {
+            const map: Record<string, { customer: number; reseller: number; plan_id?: string }> = {};
+            snap.docs.forEach((doc) => {
+              const d = doc.data() as any;
+              map[d.network] = {
+                customer: d.customerDiscountPercent ?? d.discountPercentage ?? 2.0,
+                reseller: d.resellerDiscountPercent ?? d.resellerDiscountPercentage ?? 3.5,
+                plan_id: d.plan_id || '',
+              };
+            });
+            setAirtimeDiscounts(prev => ({ ...prev, ...map }));
+          }
+        } catch (err) {
+          console.warn('Airtime discounts Firestore fallback note:', err);
+        }
+      }
+    };
+    loadDiscounts();
   }, []);
 
   // Auto-detect network when phone number changes

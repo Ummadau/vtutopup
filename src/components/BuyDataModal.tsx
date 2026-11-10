@@ -50,11 +50,22 @@ export const BuyDataModal: React.FC<BuyDataModalProps> = ({
       try {
         const res = await fetch(`/api/services/data/plans?network=${selectedNetwork}`);
         const data = await res.json().catch(() => ({}));
-        if (data && data.plans) {
+        if (data && data.plans && data.plans.length > 0) {
           setPlans(data.plans);
-          if (data.plans.length > 0) {
-            const defaultMatch = data.plans.find((p: any) => p.id === 'mtn_dir_5gb') || data.plans[0];
-            setSelectedPlanId(defaultMatch.id);
+          const defaultMatch = data.plans.find((p: any) => p.id === 'mtn_dir_5gb') || data.plans[0];
+          setSelectedPlanId(defaultMatch.id);
+        } else {
+          // Direct live Firestore query fallback
+          const { collection, getDocs } = await import('firebase/firestore');
+          const { firestoreDb } = await import('../lib/firebase.ts');
+          const snap = await getDocs(collection(firestoreDb, 'dataPlans')).catch(() => null);
+          if (snap && !snap.empty) {
+            const allPlans = snap.docs.map(d => d.data() as DataPlan).filter(p => p.isActive !== false);
+            const netPlans = allPlans.filter(p => (p.network || '').toLowerCase() === selectedNetwork.toLowerCase());
+            if (netPlans.length > 0) {
+              setPlans(netPlans);
+              setSelectedPlanId(netPlans[0].id);
+            }
           }
         }
       } catch (err) {
