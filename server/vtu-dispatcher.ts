@@ -1,6 +1,12 @@
 import crypto from 'crypto';
-import { doc, getDoc, setDoc, deleteDoc, collection, getDocs } from 'firebase/firestore';
-import { firestoreDb, auth } from '../src/lib/firebase.ts';
+import {
+  fsGetDoc,
+  fsUpsertDoc,
+  fsDeleteDoc,
+  fsRunQuery,
+  isServiceAccountConfigured,
+} from '../api/_firestore.js';
+import { getCurrentUserToken } from './request-context.ts';
 import {
   VTUNaijaConfig,
   NCWalletConfig,
@@ -17,7 +23,10 @@ import {
   ExamPin,
   SystemSettings,
   ManualFundingConfig,
-  ManualFundingRequest
+  ManualFundingRequest,
+  SupportTicket,
+  NotificationItem,
+  AuditLog
 } from '../src/types/index.ts';
 import { db } from './db.ts';
 import { getFirestoreUnityBillsConfig } from './unitybills-provider.ts';
@@ -45,267 +54,440 @@ export interface VTUDispatchResult {
   error?: string;
 }
 
+async function markCatalogBootstrapped(userToken: string | null = getCurrentUserToken()): Promise<void> {
+  db.catalogBootstrapped = true;
+  db.saveToDisk();
+  await fsUpsertDoc(
+    'systemSettings',
+    'catalog_meta',
+    { bootstrapped: true, updatedAt: new Date().toISOString() },
+    userToken
+  ).catch(() => null);
+}
+
 /**
  * Helper to record transaction document directly in Firestore
  */
 export async function recordTransactionInFirestore(tx: Transaction): Promise<void> {
-  if (!auth.currentUser) return;
+  const userToken = getCurrentUserToken();
   try {
-    const docRef = doc(firestoreDb, 'transactions', tx.id);
-    await setDoc(docRef, {
-      ...tx,
-      updatedAt: new Date().toISOString(),
-    });
+    await fsUpsertDoc(
+      'transactions',
+      tx.id,
+      {
+        ...tx,
+        createdAt: (tx as any).createdAt || tx.date || new Date().toISOString(),
+        updatedAt: new Date().toISOString(),
+      },
+      userToken
+    );
   } catch (err: any) {
     console.warn('Firestore transaction sync note:', err?.message || err);
   }
 }
 
 export async function recordUserInFirestore(user: User): Promise<void> {
-  if (!auth.currentUser) return;
+  const userToken = getCurrentUserToken();
+  db.unmarkDeleted('users', user.id);
+  db.saveToDisk();
   try {
-    const docRef = doc(firestoreDb, 'users', user.id);
-    await setDoc(docRef, {
-      ...user,
-      updatedAt: new Date().toISOString(),
-    }, { merge: true });
+    const cleanUser = { ...user } as Record<string, any>;
+    delete cleanUser.passwordHash;
+    await fsUpsertDoc(
+      'users',
+      user.id,
+      {
+        ...cleanUser,
+        updatedAt: new Date().toISOString(),
+      },
+      userToken
+    );
   } catch (err: any) {
     console.warn('Firestore user sync note:', err?.message || err);
   }
 }
 
 export async function deleteUserFromFirestore(userId: string): Promise<void> {
-  if (!auth.currentUser) return;
+  const userToken = getCurrentUserToken();
+  db.markDeleted('users', userId);
   try {
-    const docRef = doc(firestoreDb, 'users', userId);
-    await deleteDoc(docRef);
+    await fsDeleteDoc(`users/${userId}`, userToken);
   } catch (err: any) {
     console.warn('Firestore user delete note:', err?.message || err);
   }
 }
 
 export async function saveFirestorePlatformSettings(settings: Partial<SystemSettings>): Promise<void> {
-  if (!auth.currentUser) return;
+  const userToken = getCurrentUserToken();
+  db.saveToDisk();
   try {
-    const docRef = doc(firestoreDb, 'systemSettings', 'platform_settings');
-    await setDoc(docRef, { ...settings, updatedAt: new Date().toISOString() }, { merge: true });
+    const payload = { ...settings, updatedAt: new Date().toISOString() };
+    await fsUpsertDoc('systemSettings', 'general', payload, userToken);
   } catch (err: any) {
     console.warn('Firestore platform settings save note:', err?.message || err);
   }
 }
 
 export async function saveFirestoreManualFundingConfig(config: ManualFundingConfig): Promise<void> {
-  if (!auth.currentUser) return;
+  const userToken = getCurrentUserToken();
+  db.manualFundingConfig = { ...db.manualFundingConfig, ...config };
+  db.saveToDisk();
   try {
-    const docRef = doc(firestoreDb, 'systemSettings', 'manual_funding_config');
-    await setDoc(docRef, { ...config, updatedAt: new Date().toISOString() }, { merge: true });
+    await fsUpsertDoc(
+      'settings',
+      'manual_funding',
+      { ...db.manualFundingConfig, updatedAt: new Date().toISOString() },
+      userToken
+    );
   } catch (err: any) {
     console.warn('Firestore manual funding config save note:', err?.message || err);
   }
 }
 
 export async function recordManualFundingRequestInFirestore(req: ManualFundingRequest): Promise<void> {
-  if (!auth.currentUser) return;
+  const userToken = getCurrentUserToken();
+  db.manualFundingRequests.set(req.id, req);
+  db.saveToDisk();
   try {
-    const docRef = doc(firestoreDb, 'manualFundingRequests', req.id);
-    await setDoc(docRef, { ...req, updatedAt: new Date().toISOString() }, { merge: true });
+    await fsUpsertDoc(
+      'manual_funding_requests',
+      req.id,
+      { ...req, updatedAt: new Date().toISOString() },
+      userToken
+    );
   } catch (err: any) {
     console.warn('Firestore manual funding request note:', err?.message || err);
   }
 }
 
 export async function recordDataPlanInFirestore(plan: DataPlan): Promise<void> {
-  if (!auth.currentUser) return;
+  const userToken = getCurrentUserToken();
+  db.unmarkDeleted('dataPlans', plan.id);
+  db.saveToDisk();
   try {
-    const docRef = doc(firestoreDb, 'dataPlans', plan.id);
-    await setDoc(docRef, { ...plan, updatedAt: new Date().toISOString() }, { merge: true });
+    await fsUpsertDoc(
+      'dataPlans',
+      plan.id,
+      { ...plan, updatedAt: new Date().toISOString() },
+      userToken
+    );
+    await markCatalogBootstrapped(userToken);
   } catch (err: any) {
     console.warn('Firestore data plan sync note:', err?.message || err);
   }
 }
 
 export async function deleteDataPlanFromFirestore(planId: string): Promise<void> {
-  if (!auth.currentUser) return;
+  const userToken = getCurrentUserToken();
+  db.markDeleted('dataPlans', planId);
   try {
-    const docRef = doc(firestoreDb, 'dataPlans', planId);
-    await deleteDoc(docRef);
+    await markCatalogBootstrapped(userToken);
+    await fsDeleteDoc(`dataPlans/${planId}`, userToken);
   } catch (err: any) {
     console.warn('Firestore data plan delete note:', err?.message || err);
   }
 }
 
 export async function recordAirtimeDiscountInFirestore(discount: AirtimeDiscount): Promise<void> {
-  if (!auth.currentUser) return;
+  const userToken = getCurrentUserToken();
+  db.saveToDisk();
   try {
-    const docRef = doc(firestoreDb, 'airtimeDiscounts', discount.network.toLowerCase());
-    await setDoc(docRef, { ...discount, updatedAt: new Date().toISOString() }, { merge: true });
+    await fsUpsertDoc(
+      'airtimeDiscounts',
+      discount.network.toLowerCase(),
+      { ...discount, updatedAt: new Date().toISOString() },
+      userToken
+    );
+    await markCatalogBootstrapped(userToken);
   } catch (err: any) {
     console.warn('Firestore airtime discount sync note:', err?.message || err);
   }
 }
 
 export async function recordElectricityDiscoInFirestore(disco: ElectricityDisco): Promise<void> {
-  if (!auth.currentUser) return;
+  const userToken = getCurrentUserToken();
+  db.unmarkDeleted('electricityDiscos', disco.id);
+  db.saveToDisk();
   try {
-    const docRef = doc(firestoreDb, 'electricityDiscos', disco.id);
-    await setDoc(docRef, { ...disco, updatedAt: new Date().toISOString() }, { merge: true });
+    await fsUpsertDoc(
+      'electricityDiscos',
+      disco.id,
+      { ...disco, updatedAt: new Date().toISOString() },
+      userToken
+    );
+    await markCatalogBootstrapped(userToken);
   } catch (err: any) {
     console.warn('Firestore electricity disco sync note:', err?.message || err);
   }
 }
 
 export async function deleteElectricityDiscoFromFirestore(discoId: string): Promise<void> {
-  if (!auth.currentUser) return;
+  const userToken = getCurrentUserToken();
+  db.markDeleted('electricityDiscos', discoId);
   try {
-    const docRef = doc(firestoreDb, 'electricityDiscos', discoId);
-    await deleteDoc(docRef);
+    await markCatalogBootstrapped(userToken);
+    await fsDeleteDoc(`electricityDiscos/${discoId}`, userToken);
   } catch (err: any) {
     console.warn('Firestore electricity disco delete note:', err?.message || err);
   }
 }
 
 export async function recordCablePackageInFirestore(pkg: CablePackage): Promise<void> {
-  if (!auth.currentUser) return;
+  const userToken = getCurrentUserToken();
+  db.unmarkDeleted('cablePackages', pkg.id);
+  db.saveToDisk();
   try {
-    const docRef = doc(firestoreDb, 'cablePackages', pkg.id);
-    await setDoc(docRef, { ...pkg, updatedAt: new Date().toISOString() }, { merge: true });
+    await fsUpsertDoc(
+      'cablePackages',
+      pkg.id,
+      { ...pkg, updatedAt: new Date().toISOString() },
+      userToken
+    );
+    await markCatalogBootstrapped(userToken);
   } catch (err: any) {
     console.warn('Firestore cable package sync note:', err?.message || err);
   }
 }
 
 export async function deleteCablePackageFromFirestore(packageId: string): Promise<void> {
-  if (!auth.currentUser) return;
+  const userToken = getCurrentUserToken();
+  db.markDeleted('cablePackages', packageId);
   try {
-    const docRef = doc(firestoreDb, 'cablePackages', packageId);
-    await deleteDoc(docRef);
+    await markCatalogBootstrapped(userToken);
+    await fsDeleteDoc(`cablePackages/${packageId}`, userToken);
   } catch (err: any) {
     console.warn('Firestore cable package delete note:', err?.message || err);
   }
 }
 
 export async function recordExamPinInFirestore(pin: ExamPin): Promise<void> {
-  if (!auth.currentUser) return;
+  const userToken = getCurrentUserToken();
+  db.unmarkDeleted('examPins', pin.id);
+  db.saveToDisk();
   try {
-    const docRef = doc(firestoreDb, 'examPins', pin.id);
-    await setDoc(docRef, { ...pin, updatedAt: new Date().toISOString() }, { merge: true });
+    await fsUpsertDoc(
+      'examPins',
+      pin.id,
+      { ...pin, updatedAt: new Date().toISOString() },
+      userToken
+    );
+    await markCatalogBootstrapped(userToken);
   } catch (err: any) {
     console.warn('Firestore exam pin sync note:', err?.message || err);
   }
 }
 
 export async function deleteExamPinFromFirestore(pinId: string): Promise<void> {
-  if (!auth.currentUser) return;
+  const userToken = getCurrentUserToken();
+  db.markDeleted('examPins', pinId);
   try {
-    const docRef = doc(firestoreDb, 'examPins', pinId);
-    await deleteDoc(docRef);
+    await markCatalogBootstrapped(userToken);
+    await fsDeleteDoc(`examPins/${pinId}`, userToken);
   } catch (err: any) {
     console.warn('Firestore exam pin delete note:', err?.message || err);
   }
 }
 
+export async function recordTicketInFirestore(ticket: SupportTicket): Promise<void> {
+  const userToken = getCurrentUserToken();
+  db.saveToDisk();
+  try {
+    await fsUpsertDoc(
+      'supportTickets',
+      ticket.id,
+      { ...ticket, updatedAt: ticket.updatedAt || new Date().toISOString() },
+      userToken
+    );
+  } catch (err: any) {
+    console.warn('Firestore ticket sync note:', err?.message || err);
+  }
+}
+
+export async function recordNotificationInFirestore(notif: NotificationItem): Promise<void> {
+  const userToken = getCurrentUserToken();
+  try {
+    await fsUpsertDoc('notifications', notif.id, notif, userToken);
+  } catch {
+    // Non-fatal
+  }
+}
+
+export async function recordAuditLogInFirestore(audit: AuditLog): Promise<void> {
+  const userToken = getCurrentUserToken();
+  try {
+    await fsUpsertDoc('auditLogs', audit.id, audit, userToken);
+  } catch {
+    // Non-fatal
+  }
+}
+
 /**
- * Loads all product settings (Electricity, Cable, Exam Pins, Data, Airtime)
- * directly from Firestore. If any product collection is empty in Firestore,
- * it seeds the default items to guarantee persistence across server reloads.
+ * Loads all product settings and persisted collections directly from Firestore.
+ * Reconciles deletions so deleted records stay deleted across restarts and deployments.
  */
 export async function initializeFirestoreProductCatalog(): Promise<void> {
+  const userToken = getCurrentUserToken();
   try {
+    const metaRes = await fsGetDoc('systemSettings/catalog_meta', userToken).catch(() => null);
+    const isBootstrapped = Boolean(metaRes?.ok && metaRes?.data?.bootstrapped) || db.catalogBootstrapped;
+    if (isBootstrapped) {
+      db.catalogBootstrapped = true;
+    }
+
     // 1. Electricity Discos (public catalog read)
-    const discoSnap = await getDocs(collection(firestoreDb, 'electricityDiscos')).catch(() => null);
-    if (discoSnap && !discoSnap.empty) {
-      discoSnap.docs.forEach(docSnap => {
-        const item = docSnap.data() as ElectricityDisco;
+    const discoRes = await fsRunQuery('electricityDiscos', [], 200, userToken).catch(() => null);
+    if (discoRes?.ok && (discoRes.documents.length > 0 || isBootstrapped)) {
+      db.electricityDiscos.clear();
+      discoRes.documents.forEach((raw: any) => {
+        const item = raw as ElectricityDisco;
+        if (!item?.id || db.deletedIds.electricityDiscos.includes(item.id)) return;
         db.electricityDiscos.set(item.id, {
           ...item,
           plan_id: item.plan_id || item.code || item.id,
           network_id: item.network_id || item.code || item.shortName || item.id,
         });
       });
-      console.log(`[Firestore Product Sync]: Loaded ${discoSnap.size} electricity discos.`);
+      console.log(`[Firestore Product Sync]: Loaded ${db.electricityDiscos.size} electricity discos.`);
     }
 
     // 2. Cable Packages (public catalog read)
-    const cableSnap = await getDocs(collection(firestoreDb, 'cablePackages')).catch(() => null);
-    if (cableSnap && !cableSnap.empty) {
-      cableSnap.docs.forEach(docSnap => {
-        const item = docSnap.data() as CablePackage;
+    const cableRes = await fsRunQuery('cablePackages', [], 300, userToken).catch(() => null);
+    if (cableRes?.ok && (cableRes.documents.length > 0 || isBootstrapped)) {
+      db.cablePackages.clear();
+      cableRes.documents.forEach((raw: any) => {
+        const item = raw as CablePackage;
+        if (!item?.id || db.deletedIds.cablePackages.includes(item.id)) return;
         db.cablePackages.set(item.id, {
           ...item,
           plan_id: item.plan_id || item.code || item.id,
           network_id: item.network_id || item.provider || 'cable',
         });
       });
-      console.log(`[Firestore Product Sync]: Loaded ${cableSnap.size} cable packages.`);
+      console.log(`[Firestore Product Sync]: Loaded ${db.cablePackages.size} cable packages.`);
     }
 
     // 3. Exam PINs (public catalog read)
-    const examSnap = await getDocs(collection(firestoreDb, 'examPins')).catch(() => null);
-    if (examSnap && !examSnap.empty) {
-      examSnap.docs.forEach(docSnap => {
-        const item = docSnap.data() as ExamPin;
+    const examRes = await fsRunQuery('examPins', [], 200, userToken).catch(() => null);
+    if (examRes?.ok && (examRes.documents.length > 0 || isBootstrapped)) {
+      db.examPins.clear();
+      examRes.documents.forEach((raw: any) => {
+        const item = raw as ExamPin;
+        if (!item?.id || db.deletedIds.examPins.includes(item.id)) return;
         db.examPins.set(item.id, {
           ...item,
           plan_id: item.plan_id || item.code || item.exam || item.id,
           network_id: item.network_id || item.exam || 'exam',
         });
       });
-      console.log(`[Firestore Product Sync]: Loaded ${examSnap.size} exam pins.`);
+      console.log(`[Firestore Product Sync]: Loaded ${db.examPins.size} exam pins.`);
     }
 
     // 4. Data Plans (public catalog read)
-    const dataSnap = await getDocs(collection(firestoreDb, 'dataPlans')).catch(() => null);
-    if (dataSnap && !dataSnap.empty) {
-      for (const docSnap of dataSnap.docs) {
-        const item = docSnap.data() as DataPlan;
-        const normalizedId = resolveGatewayDataPlanCode(item.plan_id || item.planCode || item.id, item.network, item.name);
-        const enhanced: DataPlan = {
+    const dataRes = await fsRunQuery('dataPlans', [], 500, userToken).catch(() => null);
+    if (dataRes?.ok && (dataRes.documents.length > 0 || isBootstrapped)) {
+      db.dataPlans.clear();
+      for (const raw of dataRes.documents) {
+        const item = raw as DataPlan;
+        if (!item?.id || db.deletedIds.dataPlans.includes(item.id)) continue;
+        const rawPid = String(item.plan_id || item.planCode || item.id);
+        const normalizedId = /^\d+$/.test(rawPid)
+          ? rawPid
+          : resolveGatewayDataPlanCode(rawPid, item.network, item.name);
+        db.dataPlans.set(item.id, {
           ...item,
           plan_id: normalizedId,
-          planCode: normalizedId,
-        };
-        db.dataPlans.set(item.id, enhanced);
+          planCode: item.planCode || normalizedId,
+        });
       }
-      console.log(`[Firestore Product Sync]: Loaded and verified ${dataSnap.size} data plans.`);
+      console.log(`[Firestore Product Sync]: Loaded ${db.dataPlans.size} data plans.`);
     }
 
     // 5. Airtime Discounts (public catalog read)
-    const airtimeSnap = await getDocs(collection(firestoreDb, 'airtimeDiscounts')).catch(() => null);
-    if (airtimeSnap && !airtimeSnap.empty) {
-      airtimeSnap.docs.forEach(docSnap => {
-        const item = docSnap.data() as AirtimeDiscount;
-        db.airtimeDiscounts.set(item.network.toLowerCase(), item);
+    const airtimeRes = await fsRunQuery('airtimeDiscounts', [], 50, userToken).catch(() => null);
+    if (airtimeRes?.ok && airtimeRes.documents.length > 0) {
+      airtimeRes.documents.forEach((raw: any) => {
+        const item = raw as AirtimeDiscount;
+        if (item?.network) {
+          db.airtimeDiscounts.set(item.network.toLowerCase(), item);
+        }
       });
-      console.log(`[Firestore Product Sync]: Loaded ${airtimeSnap.size} airtime discounts.`);
+      console.log(`[Firestore Product Sync]: Loaded ${airtimeRes.documents.length} airtime discounts.`);
     }
 
-    // 6 & 7. Restricted collections only queried when Firestore auth context exists
-    if (auth.currentUser) {
-      const usersSnap = await getDocs(collection(firestoreDb, 'users')).catch(() => null);
-      if (usersSnap && !usersSnap.empty) {
-        usersSnap.docs.forEach(docSnap => {
-          const item = docSnap.data() as User;
-          if (item.id) {
-            db.users.set(item.id, item);
+    // 6. Hydrate restricted collections when Service Account or user token is active
+    if (isServiceAccountConfigured() || userToken) {
+      const [usersRes, txsRes, ticketsRes, mfReqRes, mfCfgRes, settingsRes, auditRes] = await Promise.all([
+        fsRunQuery('users', [], 500, userToken).catch(() => null),
+        fsRunQuery('transactions', [], 500, userToken).catch(() => null),
+        fsRunQuery('supportTickets', [], 200, userToken).catch(() => null),
+        fsRunQuery('manual_funding_requests', [], 200, userToken).catch(() => null),
+        fsGetDoc('settings/manual_funding', userToken).catch(() => null),
+        fsGetDoc('systemSettings/general', userToken).catch(() => null),
+        fsRunQuery('auditLogs', [], 100, userToken).catch(() => null),
+      ]);
+
+      if (usersRes?.ok && usersRes.documents.length > 0) {
+        usersRes.documents.forEach((raw: any) => {
+          const item = raw as User;
+          if (!item?.id || db.deletedIds.users.includes(item.id)) return;
+          const existing = db.users.get(item.id) as any;
+          db.users.set(item.id, {
+            ...(existing?.passwordHash ? { passwordHash: existing.passwordHash } : {}),
+            ...item,
+          });
+          if (Array.isArray(item.virtualAccounts) && item.virtualAccounts.length > 0) {
+            db.virtualAccounts.set(item.id, item.virtualAccounts);
           }
         });
       }
 
-      const settingsSnap = await getDoc(doc(firestoreDb, 'systemSettings', 'platform_settings')).catch(() => null);
-      if (settingsSnap && settingsSnap.exists()) {
-        const savedSettings = settingsSnap.data() as SystemSettings;
+      if (txsRes?.ok && txsRes.documents.length > 0) {
+        txsRes.documents.forEach((raw: any) => {
+          const item = raw as Transaction;
+          if (item?.id) db.transactions.set(item.id, item);
+        });
+      }
+
+      if (ticketsRes?.ok && ticketsRes.documents.length > 0) {
+        ticketsRes.documents.forEach((raw: any) => {
+          const item = raw as SupportTicket;
+          if (item?.id) db.tickets.set(item.id, item);
+        });
+      }
+
+      if (mfReqRes?.ok && mfReqRes.documents.length > 0) {
+        mfReqRes.documents.forEach((raw: any) => {
+          const item = raw as ManualFundingRequest;
+          if (item?.id) db.manualFundingRequests.set(item.id, item);
+        });
+      }
+
+      if (mfCfgRes?.ok && mfCfgRes.data) {
+        db.manualFundingConfig = { ...db.manualFundingConfig, ...(mfCfgRes.data as ManualFundingConfig) };
+      }
+
+      if (settingsRes?.ok && settingsRes.data) {
         db.settings = {
           ...db.settings,
-          ...savedSettings,
-          servicesEnabled: {
-            data: true,
-            airtime: true,
-            electricity: true,
-            cable: true,
-            exam: true,
-          },
+          ...(settingsRes.data as SystemSettings),
         };
       }
+
+      if (auditRes?.ok && auditRes.documents.length > 0) {
+        const merged = new Map<string, AuditLog>();
+        db.auditLogs.forEach(a => merged.set(a.id, a));
+        auditRes.documents.forEach((a: any) => { if (a?.id) merged.set(a.id, a as AuditLog); });
+        db.auditLogs = Array.from(merged.values()).sort(
+          (a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()
+        );
+      }
+
+      await Promise.all([
+        getFirestoreVTUConfig(),
+        getFirestoreNCWalletConfig(),
+        getFirestoreServiceRouting(),
+        getFirestoreUnityBillsConfig(),
+      ]);
     }
 
     db.saveToDisk();
@@ -319,15 +501,13 @@ export const initializeFirestoreData = initializeFirestoreProductCatalog;
 
 /**
  * Load VTUNaija API credentials and configuration saved in Firestore.
- * If not yet in Firestore, bootstraps the document with defaults from db.vtuNaijaConfig.
  */
 export async function getFirestoreVTUConfig(): Promise<VTUNaijaConfig> {
-  if (!auth.currentUser) return db.vtuNaijaConfig;
+  const userToken = getCurrentUserToken();
   try {
-    const docRef = doc(firestoreDb, 'systemSettings', 'vtu_config');
-    const snap = await getDoc(docRef);
-    if (snap.exists()) {
-      const data = snap.data() as VTUNaijaConfig;
+    const res = await fsGetDoc('systemSettings/vtu_config', userToken);
+    if (res.ok && res.data) {
+      const data = res.data as VTUNaijaConfig;
       db.vtuNaijaConfig = {
         ...db.vtuNaijaConfig,
         ...data,
@@ -362,28 +542,30 @@ export async function saveFirestoreVTUConfig(config: Partial<VTUNaijaConfig>): P
   db.vtuNaijaConfig = merged;
   db.saveToDisk();
 
-  if (auth.currentUser) {
-    try {
-      const docRef = doc(firestoreDb, 'systemSettings', 'vtu_config');
-      await setDoc(docRef, {
+  const userToken = getCurrentUserToken();
+  try {
+    await fsUpsertDoc(
+      'systemSettings',
+      'vtu_config',
+      {
         ...merged,
         updatedAt: new Date().toISOString(),
-      }, { merge: true });
-    } catch (err: any) {
-      console.warn('Note: Could not persist VTU config to Firestore directly:', err?.message || err);
-    }
+      },
+      userToken
+    );
+  } catch (err: any) {
+    console.warn('Note: Could not persist VTU config to Firestore directly:', err?.message || err);
   }
 
   return merged;
 }
 
 export async function getFirestoreNCWalletConfig(): Promise<NCWalletConfig> {
-  if (!auth.currentUser) return db.ncWalletConfig;
+  const userToken = getCurrentUserToken();
   try {
-    const docRef = doc(firestoreDb, 'systemSettings', 'nc_config');
-    const snap = await getDoc(docRef);
-    if (snap.exists()) {
-      const data = snap.data() as NCWalletConfig;
+    const res = await fsGetDoc('systemSettings/nc_config', userToken);
+    if (res.ok && res.data) {
+      const data = res.data as NCWalletConfig;
       db.ncWalletConfig = {
         ...db.ncWalletConfig,
         ...data,
@@ -418,28 +600,30 @@ export async function saveFirestoreNCWalletConfig(config: Partial<NCWalletConfig
   db.ncWalletConfig = merged;
   db.saveToDisk();
 
-  if (auth.currentUser) {
-    try {
-      const docRef = doc(firestoreDb, 'systemSettings', 'nc_config');
-      await setDoc(docRef, {
+  const userToken = getCurrentUserToken();
+  try {
+    await fsUpsertDoc(
+      'systemSettings',
+      'nc_config',
+      {
         ...merged,
         updatedAt: new Date().toISOString(),
-      }, { merge: true });
-    } catch (err: any) {
-      console.warn('Note: Could not persist NCWallet config to Firestore directly:', err?.message || err);
-    }
+      },
+      userToken
+    );
+  } catch (err: any) {
+    console.warn('Note: Could not persist NCWallet config to Firestore directly:', err?.message || err);
   }
 
   return merged;
 }
 
 export async function getFirestoreServiceRouting(): Promise<ServiceRoutingConfig> {
-  if (!auth.currentUser) return db.serviceRouting;
+  const userToken = getCurrentUserToken();
   try {
-    const docRef = doc(firestoreDb, 'systemSettings', 'service_routing');
-    const snap = await getDoc(docRef);
-    if (snap.exists()) {
-      const data = snap.data() as ServiceRoutingConfig;
+    const res = await fsGetDoc('systemSettings/service_routing', userToken);
+    if (res.ok && res.data) {
+      const data = res.data as ServiceRoutingConfig;
       db.serviceRouting = {
         ...db.serviceRouting,
         ...data,
@@ -461,16 +645,19 @@ export async function saveFirestoreServiceRouting(routing: Partial<ServiceRoutin
   db.serviceRouting = merged;
   db.saveToDisk();
 
-  if (auth.currentUser) {
-    try {
-      const docRef = doc(firestoreDb, 'systemSettings', 'service_routing');
-      await setDoc(docRef, {
+  const userToken = getCurrentUserToken();
+  try {
+    await fsUpsertDoc(
+      'systemSettings',
+      'service_routing',
+      {
         ...merged,
         updatedAt: new Date().toISOString(),
-      }, { merge: true });
-    } catch (err: any) {
-      console.warn('Note: Could not persist service routing to Firestore directly:', err?.message || err);
-    }
+      },
+      userToken
+    );
+  } catch (err: any) {
+    console.warn('Note: Could not persist service routing to Firestore directly:', err?.message || err);
   }
 
   return merged;

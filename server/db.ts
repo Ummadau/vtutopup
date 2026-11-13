@@ -19,10 +19,20 @@ import {
   NCWalletConfig,
   UnityBillsConfig,
   ServiceRoutingConfig,
-  GatewayProvider
+  GatewayProvider,
+  ManualFundingConfig,
+  ManualFundingRequest
 } from '../src/types/index.ts';
 
 const DB_FILE_PATH = path.resolve(process.cwd(), 'server', 'persisted_db.json');
+
+export interface DeletedIdsRegistry {
+  users: string[];
+  dataPlans: string[];
+  electricityDiscos: string[];
+  cablePackages: string[];
+  examPins: string[];
+}
 
 class Database {
   users: Map<string, User> = new Map();
@@ -41,6 +51,16 @@ class Database {
   unityBillsConfig: UnityBillsConfig;
   serviceRouting: ServiceRoutingConfig;
   settings: SystemSettings;
+  manualFundingConfig: ManualFundingConfig;
+  manualFundingRequests: Map<string, ManualFundingRequest> = new Map();
+  deletedIds: DeletedIdsRegistry = {
+    users: [],
+    dataPlans: [],
+    electricityDiscos: [],
+    cablePackages: [],
+    examPins: [],
+  };
+  catalogBootstrapped = false;
   auditLogs: AuditLog[] = [];
   virtualAccounts: Map<string, VirtualAccount[]> = new Map();
 
@@ -143,11 +163,32 @@ class Database {
       },
     };
 
+    this.manualFundingConfig = {
+      bankName: 'Opay Digital Services',
+      accountNumber: '8069417241',
+      accountName: 'NAIM UMMADAU HARUNA',
+      supportWhatsapp: '+2348069417241',
+      instructions: 'Transfer to the admin bank account above, then submit your payment reference for instant admin verification.',
+    };
+
     const loaded = this.loadFromDisk();
     if (!loaded) {
       this.seed();
       this.saveToDisk();
     }
+  }
+
+  markDeleted(collection: keyof DeletedIdsRegistry, id: string) {
+    if (!id) return;
+    if (!this.deletedIds[collection].includes(id)) {
+      this.deletedIds[collection].push(id);
+    }
+    this.saveToDisk();
+  }
+
+  unmarkDeleted(collection: keyof DeletedIdsRegistry, id: string) {
+    if (!id) return;
+    this.deletedIds[collection] = this.deletedIds[collection].filter(x => x !== id);
   }
 
   loadFromDisk(): boolean {
@@ -156,79 +197,137 @@ class Database {
         const raw = fs.readFileSync(DB_FILE_PATH, 'utf-8');
         const data = JSON.parse(raw);
 
+        if (data.deletedIds && typeof data.deletedIds === 'object') {
+          this.deletedIds = {
+            users: Array.isArray(data.deletedIds.users) ? data.deletedIds.users : [],
+            dataPlans: Array.isArray(data.deletedIds.dataPlans) ? data.deletedIds.dataPlans : [],
+            electricityDiscos: Array.isArray(data.deletedIds.electricityDiscos) ? data.deletedIds.electricityDiscos : [],
+            cablePackages: Array.isArray(data.deletedIds.cablePackages) ? data.deletedIds.cablePackages : [],
+            examPins: Array.isArray(data.deletedIds.examPins) ? data.deletedIds.examPins : [],
+          };
+        }
+        if (typeof data.catalogBootstrapped === 'boolean') {
+          this.catalogBootstrapped = data.catalogBootstrapped;
+        }
+
         if (data.users && Array.isArray(data.users)) {
           this.users.clear();
-          data.users.forEach((u: User) => this.users.set(u.id, u));
+          data.users.forEach((u: User) => {
+            if (u && u.id && !this.deletedIds.users.includes(u.id)) {
+              this.users.set(u.id, u);
+            }
+          });
         }
         if (data.dataPlans && Array.isArray(data.dataPlans)) {
           this.dataPlans.clear();
+          const legacySlugMap: Record<string, string> = {
+            sme_500mb: '304',
+            sme_1gb: '121',
+            sme_2gb: '122',
+            sme_3gb: '123',
+            sme_5gb: '124',
+            sme_10gb: '13',
+            air_1gb: '29',
+            air_2gb: '30',
+            air_5gb: '32',
+            air_10gb: '33',
+            glo_1gb: '21',
+            glo_2gb: '24',
+            glo_5gb: '26',
+            glo_10gb: '27',
+            '9mob_1gb': '491',
+            '9mob_2gb': '491',
+            '9mob_5gb': '498',
+          };
           data.dataPlans.forEach((p: DataPlan) => {
-            let liveId: string = p.plan_id || p.planCode || p.id;
-            if (p.id === 'mtn_sme_500mb' || p.plan_id === 'sme_500mb') liveId = '304';
-            else if (p.id === 'mtn_sme_1gb' || p.plan_id === 'sme_1gb') liveId = '121';
-            else if (p.id === 'mtn_sme_2gb' || p.plan_id === 'sme_2gb') liveId = '122';
-            else if (p.id === 'mtn_sme_3gb' || p.plan_id === 'sme_3gb') liveId = '123';
-            else if (p.id === 'mtn_sme_5gb' || p.plan_id === 'sme_5gb') liveId = '124';
-            else if (p.id === 'mtn_sme_10gb' || p.plan_id === 'sme_10gb') liveId = '13';
-            else if (p.id === 'mtn_dir_1gb' || p.plan_id === '1000') liveId = '2';
-            else if (p.id === 'mtn_dir_2gb' || p.plan_id === '2000') liveId = '264';
-            else if (p.id === 'mtn_dir_5gb' || p.plan_id === '5000') liveId = '5';
-            else if (p.id === 'mtn_dir_10gb' || p.plan_id === '10000') liveId = '6';
-            else if (p.id === 'airtel_cg_1gb' || p.plan_id === 'air_1gb') liveId = '29';
-            else if (p.id === 'airtel_cg_2gb' || p.plan_id === 'air_2gb') liveId = '30';
-            else if (p.id === 'airtel_cg_5gb' || p.plan_id === 'air_5gb') liveId = '32';
-            else if (p.id === 'airtel_cg_10gb' || p.plan_id === 'air_10gb') liveId = '33';
-            else if (p.id === 'glo_cg_1gb' || p.plan_id === 'glo_1gb') liveId = '21';
-            else if (p.id === 'glo_cg_2gb' || p.plan_id === 'glo_2gb') liveId = '24';
-            else if (p.id === 'glo_cg_5gb' || p.plan_id === 'glo_5gb') liveId = '26';
-            else if (p.id === 'glo_cg_10gb' || p.plan_id === 'glo_10gb') liveId = '27';
-            else if (p.id === '9mobile_sme_1gb' || p.plan_id === '9mob_1gb') liveId = '491';
-            else if (p.id === '9mobile_sme_2gb' || p.plan_id === '9mob_2gb') liveId = '491';
-            else if (p.id === '9mobile_sme_5gb' || p.plan_id === '9mob_5gb') liveId = '498';
-
+            if (!p || !p.id || this.deletedIds.dataPlans.includes(p.id)) return;
+            const rawPid = String(p.plan_id || p.planCode || p.id);
+            const liveId = legacySlugMap[rawPid] || rawPid;
             const cleanPlan: DataPlan = {
               ...p,
               plan_id: liveId,
-              planCode: liveId,
+              planCode: p.planCode || liveId,
             };
             this.dataPlans.set(p.id, cleanPlan);
           });
         }
         if (data.airtimeDiscounts && Array.isArray(data.airtimeDiscounts)) {
           this.airtimeDiscounts.clear();
-          data.airtimeDiscounts.forEach((d: AirtimeDiscount) => this.airtimeDiscounts.set(d.network.toLowerCase(), d));
+          data.airtimeDiscounts.forEach((d: AirtimeDiscount) => {
+            if (d?.network) this.airtimeDiscounts.set(d.network.toLowerCase(), d);
+          });
         }
         if (data.electricityDiscos && Array.isArray(data.electricityDiscos)) {
           this.electricityDiscos.clear();
-          data.electricityDiscos.forEach((d: ElectricityDisco) => this.electricityDiscos.set(d.id, d));
+          data.electricityDiscos.forEach((d: ElectricityDisco) => {
+            if (d?.id && !this.deletedIds.electricityDiscos.includes(d.id)) {
+              this.electricityDiscos.set(d.id, d);
+            }
+          });
         }
         if (data.cablePackages && Array.isArray(data.cablePackages)) {
           this.cablePackages.clear();
-          data.cablePackages.forEach((c: CablePackage) => this.cablePackages.set(c.id, c));
+          data.cablePackages.forEach((c: CablePackage) => {
+            if (c?.id && !this.deletedIds.cablePackages.includes(c.id)) {
+              this.cablePackages.set(c.id, c);
+            }
+          });
         }
         if (data.examPins && Array.isArray(data.examPins)) {
           this.examPins.clear();
-          data.examPins.forEach((e: ExamPin) => this.examPins.set(e.id, e));
+          data.examPins.forEach((e: ExamPin) => {
+            if (e?.id && !this.deletedIds.examPins.includes(e.id)) {
+              this.examPins.set(e.id, e);
+            }
+          });
         }
         if (data.transactions && Array.isArray(data.transactions)) {
           this.transactions.clear();
-          data.transactions.forEach((t: Transaction) => this.transactions.set(t.id, t));
+          data.transactions.forEach((t: Transaction) => {
+            if (t?.id) this.transactions.set(t.id, t);
+          });
         }
         if (data.ledger && Array.isArray(data.ledger)) {
           this.ledger = data.ledger;
         }
+        if (data.tickets && Array.isArray(data.tickets)) {
+          this.tickets.clear();
+          data.tickets.forEach((t: SupportTicket) => {
+            if (t?.id) this.tickets.set(t.id, t);
+          });
+        }
         if (data.notifications && Array.isArray(data.notifications)) {
           this.notifications.clear();
-          data.notifications.forEach((n: NotificationItem) => this.notifications.set(n.id, n));
+          data.notifications.forEach((n: NotificationItem) => {
+            if (n?.id) this.notifications.set(n.id, n);
+          });
+        }
+        if (data.providers && Array.isArray(data.providers)) {
+          this.providers.clear();
+          data.providers.forEach((p: ProviderConfig) => {
+            if (p?.id) this.providers.set(p.id, p);
+          });
         }
         if (data.settings) {
           this.settings = { ...this.settings, ...data.settings };
+        }
+        if (data.manualFundingConfig) {
+          this.manualFundingConfig = { ...this.manualFundingConfig, ...data.manualFundingConfig };
+        }
+        if (data.manualFundingRequests && Array.isArray(data.manualFundingRequests)) {
+          this.manualFundingRequests.clear();
+          data.manualFundingRequests.forEach((r: ManualFundingRequest) => {
+            if (r?.id) this.manualFundingRequests.set(r.id, r);
+          });
         }
         if (data.vtuNaijaConfig) {
           this.vtuNaijaConfig = { ...this.vtuNaijaConfig, ...data.vtuNaijaConfig };
         }
         if (data.ncWalletConfig) {
           this.ncWalletConfig = { ...this.ncWalletConfig, ...data.ncWalletConfig };
+        }
+        if (data.unityBillsConfig) {
+          this.unityBillsConfig = { ...this.unityBillsConfig, ...data.unityBillsConfig };
         }
         if (data.serviceRouting) {
           this.serviceRouting = { ...this.serviceRouting, ...data.serviceRouting };
@@ -266,12 +365,18 @@ class Database {
         examPins: Array.from(this.examPins.values()),
         transactions: Array.from(this.transactions.values()),
         ledger: this.ledger,
+        tickets: Array.from(this.tickets.values()),
         notifications: Array.from(this.notifications.values()),
         providers: Array.from(this.providers.values()),
         vtuNaijaConfig: this.vtuNaijaConfig,
         ncWalletConfig: this.ncWalletConfig,
+        unityBillsConfig: this.unityBillsConfig,
         serviceRouting: this.serviceRouting,
         settings: this.settings,
+        manualFundingConfig: this.manualFundingConfig,
+        manualFundingRequests: Array.from(this.manualFundingRequests.values()),
+        deletedIds: this.deletedIds,
+        catalogBootstrapped: this.catalogBootstrapped,
         auditLogs: this.auditLogs,
         virtualAccounts: virtObj,
       };
@@ -280,7 +385,9 @@ class Database {
       if (!fs.existsSync(dir)) {
         fs.mkdirSync(dir, { recursive: true });
       }
-      fs.writeFileSync(DB_FILE_PATH, JSON.stringify(payload, null, 2), 'utf-8');
+      const tmpPath = `${DB_FILE_PATH}.tmp`;
+      fs.writeFileSync(tmpPath, JSON.stringify(payload, null, 2), 'utf-8');
+      fs.renameSync(tmpPath, DB_FILE_PATH);
     } catch (e) {
       console.warn('Note saving database to disk:', e);
     }

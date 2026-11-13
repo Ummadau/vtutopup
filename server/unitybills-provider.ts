@@ -1,5 +1,5 @@
-import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { firestoreDb, auth } from '../src/lib/firebase.ts';
+import { fsGetDoc, fsUpsertDoc } from '../api/_firestore.js';
+import { getCurrentUserToken } from './request-context.ts';
 import { UnityBillsConfig, VirtualAccount, User } from '../src/types/index.ts';
 import { db } from './db.ts';
 import { saveUserVirtualAccount } from './billstack-provider.ts';
@@ -29,55 +29,51 @@ export const defaultUnityBillsConfig: UnityBillsConfig = {
   balance: 0,
 };
 
-// In-memory runtime cache synchronized with Firestore
-let memoryUnityBillsConfig: UnityBillsConfig = { ...defaultUnityBillsConfig };
-
 /**
- * Load UnityBills configuration from Firestore with memory fallback
+ * Load UnityBills configuration from Firestore with memory/disk fallback
  */
 export async function getFirestoreUnityBillsConfig(): Promise<UnityBillsConfig> {
-  if (!auth.currentUser) return memoryUnityBillsConfig;
+  const userToken = getCurrentUserToken();
   try {
-    const docRef = doc(firestoreDb, 'systemSettings', 'unitybills_config');
-    const snap = await getDoc(docRef);
-    if (snap.exists()) {
-      const data = snap.data() as UnityBillsConfig;
-      memoryUnityBillsConfig = {
+    const res = await fsGetDoc('systemSettings/unitybills_config', userToken);
+    if (res.ok && res.data) {
+      const data = res.data as UnityBillsConfig;
+      db.unityBillsConfig = {
         ...defaultUnityBillsConfig,
-        ...memoryUnityBillsConfig,
+        ...db.unityBillsConfig,
         ...data,
       };
     }
   } catch (err: any) {
     console.warn('Note: Reading UnityBills config from memory fallback:', err?.message || err);
   }
-  return memoryUnityBillsConfig;
+  return db.unityBillsConfig;
 }
 
 export async function saveFirestoreUnityBillsConfig(config: Partial<UnityBillsConfig>): Promise<UnityBillsConfig> {
-  memoryUnityBillsConfig = {
-    ...memoryUnityBillsConfig,
+  db.unityBillsConfig = {
+    ...db.unityBillsConfig,
     ...config,
     lastTested: new Date().toISOString(),
   };
+  db.saveToDisk();
 
-  if (auth.currentUser) {
-    try {
-      const docRef = doc(firestoreDb, 'systemSettings', 'unitybills_config');
-      await setDoc(
-        docRef,
-        {
-          ...memoryUnityBillsConfig,
-          updatedAt: new Date().toISOString(),
-        },
-        { merge: true }
-      );
-    } catch (err: any) {
-      console.warn('Firestore UnityBills config save note:', err?.message || err);
-    }
+  const userToken = getCurrentUserToken();
+  try {
+    await fsUpsertDoc(
+      'systemSettings',
+      'unitybills_config',
+      {
+        ...db.unityBillsConfig,
+        updatedAt: new Date().toISOString(),
+      },
+      userToken
+    );
+  } catch (err: any) {
+    console.warn('Firestore UnityBills config save note:', err?.message || err);
   }
 
-  return memoryUnityBillsConfig;
+  return db.unityBillsConfig;
 }
 
 /**

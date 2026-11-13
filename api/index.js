@@ -101,7 +101,12 @@ export default async function handler(req, res) {
   if (url.includes('/user/referrals')) return handleUserReferrals(req, res);
   if (url.includes('/reseller/stats')) return handleResellerStats(req, res);
   if (url.includes('/admin/')) return handleAdminRoutes(req, res);
-  if (url.includes('/support/tickets')) return handleSupportTickets(req, res);
+  if (url.includes('/support/tickets')) {
+    if (req.method === 'PUT' && url.includes('/status')) {
+      return handleAdminRoutes(req, res);
+    }
+    return handleSupportTickets(req, res);
+  }
   if (url.includes('/transactions')) return transactionsHandler(req, res);
   if (url.includes('/notifications')) return notificationsHandler(req, res);
 

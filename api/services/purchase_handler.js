@@ -865,7 +865,10 @@ export async function handleSupportTickets(req, res) {
           message: String(body.message),
           timestamp: nowIso,
         });
-        await fsPatchDoc(`supportTickets/${ticketId}`, { messages, updatedAt: nowIso }, ['messages', 'updatedAt'], userToken);
+        const patchRes = await fsPatchDoc(`supportTickets/${ticketId}`, { messages, updatedAt: nowIso }, ['messages', 'updatedAt'], userToken);
+        if (!patchRes.ok) {
+          return res.status(503).json({ success: false, error: patchRes.error || 'Failed to save ticket reply' });
+        }
         return res.status(200).json({ success: true, ticket: { ...ticket, messages, updatedAt: nowIso } });
       } catch (err) {
         return res.status(500).json({ error: err.message || 'Reply failed' });
@@ -896,7 +899,10 @@ export async function handleSupportTickets(req, res) {
       updatedAt: nowIso,
     };
 
-    await fsCreateDoc('supportTickets', ticketId, ticket, userToken).catch(() => null);
+    const createRes = await fsCreateDoc('supportTickets', ticketId, ticket, userToken).catch(() => null);
+    if (!createRes || !createRes.ok) {
+      return res.status(503).json({ success: false, error: createRes?.error || 'Failed to persist support ticket' });
+    }
     return res.status(200).json({ success: true, ticket });
   }
 

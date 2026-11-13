@@ -1,5 +1,5 @@
 // Shared Zero-Crash, High-Speed Vercel Webhook Handler for Deposit Notifications
-import { fsCreateDoc, fsGetDoc, fsPatchDoc, fsRunQuery } from './_firestore.js';
+import { fsCreateDoc, fsPatchDoc, fsRunQuery } from './_firestore.js';
 
 export async function handleUnityBillsWebhookRequest(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -101,8 +101,17 @@ export async function handleUnityBillsWebhookRequest(req, res) {
           timestamp: new Date().toISOString(),
         }).catch(() => null);
 
-        // 2. Find matching user by email or virtual account number
+        // 2. Check idempotency if reference is provided
         if (amount > 0) {
+          if (reference) {
+            const dupRes = await fsRunQuery('transactions', [{ field: 'reference', value: reference }], 1).catch(() => null);
+            if (dupRes?.ok && Array.isArray(dupRes.documents) && dupRes.documents.length > 0) {
+              creditedUserId = dupRes.documents[0].userId || null;
+              return;
+            }
+          }
+
+          // 3. Find matching user by email or virtual account number
           let matchedUser = null;
           if (customerEmail) {
             const emailRes = await fsRunQuery('users', [{ field: 'email', value: customerEmail }], 1);
@@ -111,17 +120,13 @@ export async function handleUnityBillsWebhookRequest(req, res) {
             }
           }
           if (!matchedUser && accountNumber) {
-            const usersRes = await fsRunQuery('users', [], 200);
+            const usersRes = await fsRunQuery('users', [], 300);
             if (usersRes.ok && Array.isArray(usersRes.documents)) {
               matchedUser = usersRes.documents.find(u =>
                 Array.isArray(u.virtualAccounts) &&
                 u.virtualAccounts.some(va => String(va.accountNumber || '').trim() === accountNumber)
               );
             }
-          }
-          if (!matchedUser) {
-            const fallbackRes = await fsGetDoc('users/usr_1793710273387');
-            if (fallbackRes.ok && fallbackRes.data) matchedUser = fallbackRes.data;
           }
 
           if (matchedUser) {
@@ -139,7 +144,8 @@ export async function handleUnityBillsWebhookRequest(req, res) {
             );
             balanceUpdated = Boolean(patchRes.ok);
 
-            const txId = `tx_${Date.now()}`;
+            const txId = `tx_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
+            const nowIso = new Date().toISOString();
             await fsCreateDoc('transactions', txId, {
               id: txId,
               reference: reference || txId,
@@ -147,12 +153,28 @@ export async function handleUnityBillsWebhookRequest(req, res) {
               userId: matchedUser.id,
               userName: matchedUser.name || customerName,
               userEmail: matchedUser.email || customerEmail,
+              userPhone: matchedUser.phone || '',
+              userRole: matchedUser.role || 'customer',
               serviceType: 'wallet_fund',
               recipient: `${bankName} (${accountNumber || 'Virtual Account'})`,
               amount,
+              providerCost: 0,
+              profit: 0,
               status: 'successful',
               paymentMethod: `Bank Transfer (${bankName})`,
-              date: new Date().toISOString(),
+              date: nowIso,
+              createdAt: nowIso,
+            }).catch(() => null);
+
+            const notifId = `notif_${Date.now()}_${Math.floor(100 + Math.random() * 900)}`;
+            await fsCreateDoc('notifications', notifId, {
+              id: notifId,
+              userId: matchedUser.id,
+              title: 'Wallet Credited!',
+              message: `₦${amount.toLocaleString()} deposit via ${bankName} (${accountNumber || 'Virtual Account'}) has been credited to your wallet.`,
+              type: 'success',
+              read: false,
+              createdAt: nowIso,
             }).catch(() => null);
           }
         }

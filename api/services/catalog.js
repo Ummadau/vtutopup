@@ -104,13 +104,21 @@ export function detectNetwork(phone) {
   return null;
 }
 
+async function isCatalogBootstrapped() {
+  const metaRes = await fsGetDoc('systemSettings/catalog_meta').catch(() => null);
+  return Boolean(metaRes?.ok && metaRes?.data?.bootstrapped === true);
+}
+
 export async function handleDataPlans(req, res) {
   const urlObj = new URL(req.url, 'http://localhost');
   const network = urlObj.searchParams.get('network');
   let plans = [];
 
-  const liveRes = await fsRunQuery('dataPlans', [], 300).catch(() => null);
-  if (liveRes?.ok && liveRes.documents.length > 0) {
+  const [liveRes, bootstrapped] = await Promise.all([
+    fsRunQuery('dataPlans', [], 300).catch(() => null),
+    isCatalogBootstrapped(),
+  ]);
+  if (liveRes?.ok && (liveRes.documents.length > 0 || bootstrapped)) {
     plans = liveRes.documents.filter(p => p.isActive !== false);
   } else {
     plans = loadCatalog().dataPlans || [];
@@ -124,8 +132,11 @@ export async function handleDataPlans(req, res) {
 
 export async function handleAirtimeDiscounts(req, res) {
   let discounts = [];
-  const liveRes = await fsRunQuery('airtimeDiscounts', [], 50).catch(() => null);
-  if (liveRes?.ok && liveRes.documents.length > 0) {
+  const [liveRes, bootstrapped] = await Promise.all([
+    fsRunQuery('airtimeDiscounts', [], 50).catch(() => null),
+    isCatalogBootstrapped(),
+  ]);
+  if (liveRes?.ok && (liveRes.documents.length > 0 || bootstrapped)) {
     discounts = liveRes.documents;
   } else {
     discounts = loadCatalog().airtimeDiscounts || [];
@@ -142,8 +153,11 @@ export function handleDetectNetwork(req, res) {
 
 export async function handleElectricityDiscos(req, res) {
   let discos = [];
-  const liveRes = await fsRunQuery('electricityDiscos', [], 50).catch(() => null);
-  if (liveRes?.ok && liveRes.documents.length > 0) {
+  const [liveRes, bootstrapped] = await Promise.all([
+    fsRunQuery('electricityDiscos', [], 50).catch(() => null),
+    isCatalogBootstrapped(),
+  ]);
+  if (liveRes?.ok && (liveRes.documents.length > 0 || bootstrapped)) {
     discos = liveRes.documents.filter(d => d.isActive !== false);
   } else {
     discos = loadCatalog().electricityDiscos || [];
@@ -156,8 +170,11 @@ export async function handleCablePackages(req, res) {
   const provider = urlObj.searchParams.get('provider');
   let packages = [];
 
-  const liveRes = await fsRunQuery('cablePackages', [], 200).catch(() => null);
-  if (liveRes?.ok && liveRes.documents.length > 0) {
+  const [liveRes, bootstrapped] = await Promise.all([
+    fsRunQuery('cablePackages', [], 200).catch(() => null),
+    isCatalogBootstrapped(),
+  ]);
+  if (liveRes?.ok && (liveRes.documents.length > 0 || bootstrapped)) {
     packages = liveRes.documents.filter(p => p.isActive !== false);
   } else {
     packages = loadCatalog().cablePackages || [];
@@ -171,8 +188,11 @@ export async function handleCablePackages(req, res) {
 
 export async function handleExamPins(req, res) {
   let pins = [];
-  const liveRes = await fsRunQuery('examPins', [], 50).catch(() => null);
-  if (liveRes?.ok && liveRes.documents.length > 0) {
+  const [liveRes, bootstrapped] = await Promise.all([
+    fsRunQuery('examPins', [], 50).catch(() => null),
+    isCatalogBootstrapped(),
+  ]);
+  if (liveRes?.ok && (liveRes.documents.length > 0 || bootstrapped)) {
     pins = liveRes.documents.filter(p => p.isActive !== false);
   } else {
     pins = loadCatalog().examPins || [];
@@ -184,7 +204,9 @@ export async function handleSettings(req, res) {
   const userToken = extractBearerToken(req);
   const liveGeneral = await fsGetDoc('systemSettings/general', userToken).catch(() => null);
   const livePlatform = !liveGeneral?.ok ? await fsGetDoc('systemSettings/platform_settings', userToken).catch(() => null) : null;
-  const settings = liveGeneral?.data || livePlatform?.data || loadCatalog().settings || {};
+  const defaults = loadCatalog().settings || {};
+  const liveData = liveGeneral?.data || livePlatform?.data || {};
+  const settings = { ...defaults, ...liveData };
   return res.status(200).json({ success: true, settings });
 }
 

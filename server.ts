@@ -1,8 +1,14 @@
 import express, { Request, Response } from 'express';
 import path from 'path';
 import crypto from 'crypto';
-import { doc, getDoc, setDoc, deleteDoc, collection, getDocs, query, where } from 'firebase/firestore';
-import { firestoreDb, auth } from './src/lib/firebase.ts';
+import {
+  extractBearerToken,
+  fsGetDoc,
+  fsRunQuery,
+  fsUpsertDoc,
+  isServiceAccountConfigured,
+} from './api/_firestore.js';
+import { runWithRequestContext, getCurrentUserToken } from './server/request-context.ts';
 import firebaseAppletConfig from './firebase-applet-config.json' with { type: 'json' };
 import { db } from './server/db.ts';
 import {
@@ -33,8 +39,11 @@ import {
   initializeFirestoreProductCatalog,
   initializeFirestoreData,
   recordTransactionInFirestore,
+  recordTicketInFirestore,
+  recordNotificationInFirestore,
+  recordAuditLogInFirestore,
 } from './server/vtu-provider.ts';
-import { User, Transaction, DataPlan, SupportTicket, ElectricityDisco, CablePackage, ExamPin, BillStackConfig, VirtualAccount, ManualFundingConfig, ManualFundingRequest } from './src/types/index.ts';
+import { User, Transaction, DataPlan, SupportTicket, ElectricityDisco, CablePackage, ExamPin, BillStackConfig, VirtualAccount, ManualFundingConfig, ManualFundingRequest, NotificationItem, AuditLog } from './src/types/index.ts';
 import {
   generateBillStackVirtualAccount,
   getFirestoreBillStackConfig,
@@ -67,6 +76,57 @@ app.use((req, res, next) => {
 app.use(express.json({ limit: '1mb' }));
 app.use(express.urlencoded({ extended: true, limit: '1mb' }));
 
+// Attach Firebase Bearer token from incoming request into AsyncLocalStorage for backend Firestore REST operations
+app.use((req, _res, next) => {
+  runWithRequestContext(extractBearerToken(req), () => next());
+});
+
+// Hydrate authenticated user from Firestore if missing from in-memory cache (and not deleted)
+app.use('/api', async (req, _res, next) => {
+  try {
+    const headerUid = typeof req.headers['x-user-id'] === 'string' ? req.headers['x-user-id'].trim() : '';
+    if (headerUid && !db.users.has(headerUid) && !db.deletedIds.users.includes(headerUid)) {
+      const userToken = getCurrentUserToken();
+      const docRes = await fsGetDoc(`users/${headerUid}`, userToken).catch(() => null);
+      if (docRes?.ok && docRes.data && docRes.data.id) {
+        const fetchedUser = docRes.data as User;
+        db.users.set(fetchedUser.id, fetchedUser);
+        if (Array.isArray(fetchedUser.virtualAccounts) && fetchedUser.virtualAccounts.length > 0) {
+          db.virtualAccounts.set(fetchedUser.id, fetchedUser.virtualAccounts);
+        }
+        db.saveToDisk();
+      }
+    }
+  } catch {
+    // Non-fatal hydration
+  }
+  next();
+});
+
+function persistNotification(item: Omit<NotificationItem, 'id' | 'createdAt' | 'read'>): NotificationItem {
+  const notif = db.addNotification(item);
+  recordNotificationInFirestore(notif).catch(() => {});
+  return notif;
+}
+
+function persistAudit(adminEmail: string, action: string, target: string, details: string, ip = '127.0.0.1'): void {
+  db.addAudit(adminEmail, action, target, details, ip);
+  const latest = db.auditLogs[0];
+  if (latest) {
+    recordAuditLogInFirestore(latest).catch(() => {});
+  }
+}
+
+function stripMaskedSecrets<T extends Record<string, any>>(payload: T): T {
+  const clean: Record<string, any> = { ...payload };
+  for (const field of ['apiKey', 'secretKey', 'webhookSecret']) {
+    if (typeof clean[field] === 'string' && (clean[field].includes('****') || clean[field].trim() === '')) {
+      delete clean[field];
+    }
+  }
+  return clean as T;
+}
+
 /**
  * Specialized diagnostic logger that logs incoming webhooks directly into Firestore 'webhook_logs'
  */
@@ -87,14 +147,13 @@ async function logWebhookToFirestore(req: Request) {
     timestamp: new Date().toISOString(),
   };
 
-  if (auth.currentUser) {
-    try {
-      const docRef = doc(firestoreDb, 'webhook_logs', logId);
-      await setDoc(docRef, logPayload);
+  try {
+    const res = await fsUpsertDoc('webhook_logs', logId, logPayload, getCurrentUserToken());
+    if (res.ok) {
       console.log(`[Webhook Diagnostic Log] Logged ${req.method} ${req.path} to Firestore 'webhook_logs' (${logId})`);
-    } catch (err: any) {
-      console.warn('[Webhook Log Firestore Error]:', err?.message || err);
     }
+  } catch (err: any) {
+    console.warn('[Webhook Log Firestore Error]:', err?.message || err);
   }
 
   return logPayload;
@@ -271,10 +330,10 @@ const handleEarlyWebhookRequest = async (req: Request, res: Response) => {
         date: new Date().toISOString(),
         paymentMethod: `Bank Transfer (${bankName})`,
       };
-      db.transactions.set(txId, tx);
+      db.saveToDisk();
       await recordTransactionInFirestore(tx).catch(() => {});
 
-      db.addNotification({
+      persistNotification({
         userId: matchedUser.id,
         title: 'Virtual Account Deposit Credited!',
         message: `₦${amount.toLocaleString()} received into your ${bankName} account. Wallet credited instantly!`,
@@ -460,7 +519,7 @@ function getAuthenticatedUser(req: Request): User {
   const userId = (req.headers['x-user-id'] as string) || 'usr_ahmad_01';
   const user = db.users.get(userId);
   if (!user) {
-    return db.users.get('usr_ahmad_01')!;
+    return db.users.get('usr_ahmad_01') || Array.from(db.users.values())[0];
   }
   return user;
 }
@@ -488,9 +547,10 @@ app.post('/api/user/biometrics/register', (req: Request, res: Response) => {
 
   user.biometricCredentialId = credentialId;
   db.users.set(user.id, user);
+  db.saveToDisk();
   recordUserInFirestore(user).catch(() => {});
 
-  db.addAudit(user.email, 'REGISTER_BIOMETRICS', 'USER_PROFILE', `Registered WebAuthn biometric credential: ${String(credentialId).slice(0, 12)}...`);
+  persistAudit(user.email, 'REGISTER_BIOMETRICS', 'USER_PROFILE', `Registered WebAuthn biometric credential: ${String(credentialId).slice(0, 12)}...`);
 
   res.json({ success: true, message: 'Biometric Touch ID / Face ID registered successfully', user });
 });
@@ -594,11 +654,12 @@ app.post('/api/auth/register', (req: Request, res: Response) => {
 
   db.users.set(newUser.id, newUser);
   db.virtualAccounts.set(newUser.id, []);
+  db.saveToDisk();
 
   // Sync to Firestore for permanent persistence
   recordUserInFirestore(newUser).catch(() => {});
 
-  db.addNotification({
+  persistNotification({
     userId: newUser.id,
     title: 'Welcome to NPay!',
     message: 'Your account has been created. Fund your wallet to start enjoying fast & affordable digital services.',
@@ -668,22 +729,23 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
     return (userEmail && userEmail === clean) || (userPhone && userPhone === cleanPhone);
   });
 
-  // Fallback: Query Firestore only if Firebase Auth session is active
-  if (!user && auth.currentUser) {
+  // Fallback: Query Firestore via REST if not in local disk cache
+  if (!user) {
     try {
-      const usersRef = collection(firestoreDb, 'users');
-      let snap = await getDocs(query(usersRef, where('email', '==', clean))).catch(() => null);
-      if (!snap || snap.empty) {
-        snap = await getDocs(query(usersRef, where('phone', '==', cleanPhone))).catch(() => null);
+      const userToken = getCurrentUserToken();
+      let qRes = await fsRunQuery('users', [{ field: 'email', value: clean }], 1, userToken).catch(() => null);
+      if (!qRes?.ok || qRes.documents.length === 0) {
+        qRes = await fsRunQuery('users', [{ field: 'phone', value: cleanPhone }], 1, userToken).catch(() => null);
       }
-      if (snap && !snap.empty) {
-        const docData = snap.docs[0].data() as User;
-        if (docData && docData.id) {
+      if (qRes?.ok && qRes.documents.length > 0) {
+        const docData = qRes.documents[0] as User;
+        if (docData && docData.id && !db.deletedIds.users.includes(docData.id)) {
           user = {
             ...docData,
             transactionPin: docData.transactionPin || '1234',
           };
           db.users.set(user.id, user);
+          db.saveToDisk();
         }
       }
     } catch (fsErr) {
@@ -799,7 +861,7 @@ app.post('/api/auth/switch-user', (req: Request, res: Response) => {
   res.json({ success: true, user: sanitizeUser(target) });
 });
 
-app.post('/api/auth/set-pin', (req: Request, res: Response) => {
+app.post('/api/auth/set-pin', async (req: Request, res: Response) => {
   const user = getAuthenticatedUser(req);
   const { currentPin, newPin } = req.body;
 
@@ -815,9 +877,11 @@ app.post('/api/auth/set-pin', (req: Request, res: Response) => {
   }
 
   user.transactionPin = cleanNewPin;
-  recordUserInFirestore(user).catch(() => {});
+  db.users.set(user.id, user);
+  db.saveToDisk();
+  await recordUserInFirestore(user).catch(() => {});
 
-  res.json({ success: true, user, message: 'Transaction PIN updated successfully' });
+  res.json({ success: true, user: sanitizeUser(user), message: 'Transaction PIN updated successfully' });
 });
 
 // Check and trigger real-time Low Balance Push Alert when user balance is below ₦1,000
@@ -833,7 +897,7 @@ function checkAndTriggerLowBalanceAlert(user: User) {
     const isRecent = lastAlert && (Date.now() - new Date(lastAlert.createdAt).getTime()) < 300000; // 5 minutes
 
     if (!isRecent) {
-      db.addNotification({
+      persistNotification({
         userId: user.id,
         title: alertTitle,
         message: alertMessage,
@@ -853,7 +917,7 @@ app.post('/api/notifications/fcm-send', (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Missing title or body' });
   }
 
-  const notif = db.addNotification({
+  const notif = persistNotification({
     userId: user.id,
     title,
     message: body,
@@ -873,12 +937,12 @@ app.post('/api/notifications/fcm-send', (req: Request, res: Response) => {
 // ==================== HEALTH CHECK ====================
 app.get('/api/health', async (_req: Request, res: Response) => {
   try {
-    const snap = await getDocs(collection(firestoreDb, 'dataPlans')).catch(() => null);
+    const liveRes = await fsRunQuery('dataPlans', [], 50, getCurrentUserToken());
     res.json({
-      success: Boolean(snap),
-      firestoreConnected: Boolean(snap),
-      publicCatalogCount: snap ? snap.size : 0,
-      serviceAccountConfigured: Boolean(process.env.FIREBASE_SERVICE_ACCOUNT_KEY || process.env.FIREBASE_CLIENT_EMAIL),
+      success: Boolean(liveRes.ok),
+      firestoreConnected: Boolean(liveRes.ok),
+      publicCatalogCount: liveRes.ok ? liveRes.documents.length : 0,
+      serviceAccountConfigured: isServiceAccountConfigured(),
     });
   } catch (err: any) {
     res.status(200).json({
@@ -890,18 +954,23 @@ app.get('/api/health', async (_req: Request, res: Response) => {
 });
 
 // ==================== SYSTEM SETTINGS ====================
-app.get('/api/settings', (req: Request, res: Response) => {
+app.get('/api/settings', async (_req: Request, res: Response) => {
+  const live = await fsGetDoc('systemSettings/general', getCurrentUserToken()).catch(() => null);
+  if (live?.ok && live.data) {
+    db.settings = { ...db.settings, ...(live.data as any) };
+    db.saveToDisk();
+  }
   res.json({ settings: db.settings });
 });
 
-app.put('/api/settings', (req: Request, res: Response) => {
+app.put('/api/settings', async (req: Request, res: Response) => {
   const user = getAuthenticatedUser(req);
   if (user.role !== 'admin') {
     return res.status(403).json({ error: 'Unauthorized: Admin access required' });
   }
   db.settings = { ...db.settings, ...req.body };
-  saveFirestorePlatformSettings(db.settings).catch(() => {});
-  db.addAudit(user.email, 'UPDATE_SETTINGS', 'SYSTEM', JSON.stringify(req.body));
+  await saveFirestorePlatformSettings(db.settings).catch(() => {});
+  persistAudit(user.email, 'UPDATE_SETTINGS', 'SYSTEM', JSON.stringify(req.body));
   res.json({ success: true, settings: db.settings });
 });
 
@@ -944,7 +1013,7 @@ app.post('/api/wallet/fund/initiate', (req: Request, res: Response) => {
   });
 });
 
-app.post('/api/wallet/fund/verify', (req: Request, res: Response) => {
+app.post('/api/wallet/fund/verify', async (req: Request, res: Response) => {
   const user = getAuthenticatedUser(req);
   const { reference, amount, gateway } = req.body;
   const numAmount = parseFloat(amount);
@@ -991,6 +1060,9 @@ app.post('/api/wallet/fund/verify', (req: Request, res: Response) => {
     paymentMethod: gateway || 'Paystack Card/Transfer',
   };
   db.transactions.set(txId, tx);
+  db.saveToDisk();
+  await recordUserInFirestore(user).catch(() => {});
+  await recordTransactionInFirestore(tx).catch(() => {});
 
   // Check referral bonus for referrer
   if (user.referredBy) {
@@ -1000,7 +1072,8 @@ app.post('/api/wallet/fund/verify', (req: Request, res: Response) => {
       if (bonus > 0 && bonus <= 500) {
         referrer.referralEarnings += bonus;
         db.creditWallet(referrer.id, bonus, `REF-BONUS-${Date.now()}`, `Referral bonus from ${user.name}`);
-        db.addNotification({
+        await recordUserInFirestore(referrer).catch(() => {});
+        persistNotification({
           userId: referrer.id,
           title: 'Referral Bonus Credited!',
           message: `You earned ₦${bonus.toLocaleString()} referral commission from ${user.name}'s wallet top-up.`,
@@ -1010,7 +1083,7 @@ app.post('/api/wallet/fund/verify', (req: Request, res: Response) => {
     }
   }
 
-  db.addNotification({
+  persistNotification({
     userId: user.id,
     title: 'Wallet Funded Successfully',
     message: `₦${numAmount.toLocaleString()} has been credited to your wallet. Reference: ${reference}`,
@@ -1026,7 +1099,7 @@ app.post('/api/wallet/fund/verify', (req: Request, res: Response) => {
 });
 
 // Simulate Instant Bank Transfer to Virtual Account
-app.post('/api/wallet/simulate-transfer', (req: Request, res: Response) => {
+app.post('/api/wallet/simulate-transfer', async (req: Request, res: Response) => {
   const user = getAuthenticatedUser(req);
   const { amount, bankName } = req.body;
   const numAmount = parseFloat(amount) || 5000;
@@ -1058,8 +1131,11 @@ app.post('/api/wallet/simulate-transfer', (req: Request, res: Response) => {
     paymentMethod: 'Instant Virtual Bank Transfer',
   };
   db.transactions.set(txId, tx);
+  db.saveToDisk();
+  await recordUserInFirestore(user).catch(() => {});
+  await recordTransactionInFirestore(tx).catch(() => {});
 
-  db.addNotification({
+  persistNotification({
     userId: user.id,
     title: 'Instant Bank Deposit Received',
     message: `Received ₦${numAmount.toLocaleString()} into your virtual account. Wallet credited immediately.`,
@@ -1233,15 +1309,18 @@ app.post('/api/webhooks/billstack', (req: Request, res: Response) => {
         paymentMethod: `Bank Transfer (${bankName})`,
       };
       db.transactions.set(txId, tx);
+      db.saveToDisk();
+      recordUserInFirestore(matchedUser).catch(() => {});
+      recordTransactionInFirestore(tx).catch(() => {});
 
-      db.addNotification({
+      persistNotification({
         userId: matchedUser.id,
         title: 'Virtual Account Deposit Credited!',
         message: `₦${amount.toLocaleString()} received into your ${bankName} account${payerName ? ` from ${payerName}` : ''}. Wallet credited instantly!`,
         type: 'success',
       });
 
-      console.log(`[BillStack Webhook] Credited ₦${amount} to ${matchedUser.email} (Ref: ${txRef})`);
+      console.log(`[BillStack Webhook] Credited ₦${amount} to ${matchedUser.email} (Ref: ${reference})`);
     } catch (err: any) {
       console.error('[BillStack Webhook] Processing error:', err);
     }
@@ -1381,8 +1460,11 @@ const handleUnityBillsWebhook = (req: Request, res: Response) => {
         paymentMethod: `Bank Transfer (${bankName})`,
       };
       db.transactions.set(txId, tx);
+      db.saveToDisk();
+      recordUserInFirestore(matchedUser).catch(() => {});
+      recordTransactionInFirestore(tx).catch(() => {});
 
-      db.addNotification({
+      persistNotification({
         userId: matchedUser.id,
         title: 'Virtual Account Deposit Credited!',
         message: `₦${amount.toLocaleString()} received into your ${bankName} account. Wallet credited instantly!`,
@@ -1506,8 +1588,11 @@ app.post('/api/admin/billstack/test-webhook', async (req: Request, res: Response
       paymentMethod: `Bank Transfer (${targetAcc.bankName})`,
     };
     db.transactions.set(txId, tx);
+    db.saveToDisk();
+    await recordUserInFirestore(targetUser).catch(() => {});
+    await recordTransactionInFirestore(tx).catch(() => {});
 
-    db.addNotification({
+    persistNotification({
       userId: targetUser.id,
       title: 'Virtual Account Test Deposit Credited',
       message: `₦${amount.toLocaleString()} received via ${targetAcc.bankName} simulation. Wallet balance updated!`,
@@ -1532,23 +1617,18 @@ app.post('/api/admin/billstack/test-webhook', async (req: Request, res: Response
 
 // ==================== MANUAL FUNDING BACKEND ROUTES ====================
 
-let manualFundingConfig: ManualFundingConfig = {
-  bankName: 'Moniepoint Microfinance Bank',
-  accountNumber: '8123456789',
-  accountName: 'NPAY OFFICIAL',
-  supportWhatsapp: '+2348012345678',
-  instructions: 'Transfer to the admin bank account above, then submit your payment reference for instant admin verification.',
-};
-
-let manualFundingRequests: ManualFundingRequest[] = [];
-
 // Get Manual Funding Config
-app.get('/api/wallet/manual-fund/config', (req: Request, res: Response) => {
-  res.json({ success: true, config: manualFundingConfig });
+app.get('/api/wallet/manual-fund/config', async (_req: Request, res: Response) => {
+  const live = await fsGetDoc('settings/manual_funding', getCurrentUserToken()).catch(() => null);
+  if (live?.ok && live.data) {
+    db.manualFundingConfig = { ...db.manualFundingConfig, ...(live.data as ManualFundingConfig) };
+    db.saveToDisk();
+  }
+  res.json({ success: true, config: db.manualFundingConfig });
 });
 
 // Update Manual Funding Config (Admin Only)
-app.put('/api/admin/manual-fund/config', (req: Request, res: Response) => {
+app.put('/api/admin/manual-fund/config', async (req: Request, res: Response) => {
   const user = getAuthenticatedUser(req);
   if (user.role !== 'admin') {
     return res.status(403).json({ error: 'Admin access required' });
@@ -1559,20 +1639,21 @@ app.put('/api/admin/manual-fund/config', (req: Request, res: Response) => {
     return res.status(400).json({ error: 'Bank name, account number and account name are required' });
   }
 
-  manualFundingConfig = {
+  db.manualFundingConfig = {
     bankName,
     accountNumber,
     accountName,
-    supportWhatsapp: supportWhatsapp || manualFundingConfig.supportWhatsapp,
-    instructions: instructions || manualFundingConfig.instructions,
+    supportWhatsapp: supportWhatsapp || db.manualFundingConfig.supportWhatsapp,
+    instructions: instructions || db.manualFundingConfig.instructions,
   };
 
-  db.addAudit(user.email, 'UPDATE_MANUAL_FUNDING_CONFIG', 'FINANCE', JSON.stringify(manualFundingConfig));
-  res.json({ success: true, config: manualFundingConfig, message: 'Manual funding account details updated successfully!' });
+  await saveFirestoreManualFundingConfig(db.manualFundingConfig).catch(() => {});
+  persistAudit(user.email, 'UPDATE_MANUAL_FUNDING_CONFIG', 'FINANCE', JSON.stringify(db.manualFundingConfig));
+  res.json({ success: true, config: db.manualFundingConfig, message: 'Manual funding account details updated successfully!' });
 });
 
 // Submit Manual Funding Request (Customer)
-app.post('/api/wallet/manual-fund/submit', (req: Request, res: Response) => {
+app.post('/api/wallet/manual-fund/submit', async (req: Request, res: Response) => {
   const user = getAuthenticatedUser(req);
   const { amount, senderName, senderBank, paymentReference, note } = req.body;
 
@@ -1600,9 +1681,9 @@ app.post('/api/wallet/manual-fund/submit', (req: Request, res: Response) => {
     createdAt: new Date().toISOString(),
   };
 
-  manualFundingRequests.unshift(newRequest);
+  await recordManualFundingRequestInFirestore(newRequest).catch(() => {});
 
-  db.addNotification({
+  persistNotification({
     userId: user.id,
     title: 'Manual Funding Request Submitted',
     message: `Your manual deposit request of ₦${numAmount.toLocaleString()} has been submitted. Admin will verify and credit your wallet.`,
@@ -1617,24 +1698,42 @@ app.post('/api/wallet/manual-fund/submit', (req: Request, res: Response) => {
 });
 
 // List Manual Funding Requests (Admin Only)
-app.get('/api/admin/manual-fund/requests', (req: Request, res: Response) => {
+app.get('/api/admin/manual-fund/requests', async (req: Request, res: Response) => {
   const user = getAuthenticatedUser(req);
   if (user.role !== 'admin') {
     return res.status(403).json({ error: 'Admin access required' });
   }
 
-  res.json({ success: true, requests: manualFundingRequests });
+  const liveRes = await fsRunQuery('manual_funding_requests', [], 200, getCurrentUserToken()).catch(() => null);
+  if (liveRes?.ok && Array.isArray(liveRes.documents)) {
+    liveRes.documents.forEach((r: any) => {
+      if (r?.id) db.manualFundingRequests.set(r.id, r as ManualFundingRequest);
+    });
+    db.saveToDisk();
+  }
+
+  const list = Array.from(db.manualFundingRequests.values()).sort(
+    (a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime()
+  );
+  res.json({ success: true, requests: list });
 });
 
 // Approve Manual Funding Request (Admin Only)
-app.post('/api/admin/manual-fund/approve', (req: Request, res: Response) => {
+app.post('/api/admin/manual-fund/approve', async (req: Request, res: Response) => {
   const admin = getAuthenticatedUser(req);
   if (admin.role !== 'admin') {
     return res.status(403).json({ error: 'Admin access required' });
   }
 
   const { requestId } = req.body;
-  const targetReq = manualFundingRequests.find(r => r.id === requestId);
+  let targetReq = db.manualFundingRequests.get(requestId);
+  if (!targetReq) {
+    const remote = await fsGetDoc(`manual_funding_requests/${requestId}`, getCurrentUserToken()).catch(() => null);
+    if (remote?.ok && remote.data) {
+      targetReq = remote.data as ManualFundingRequest;
+      db.manualFundingRequests.set(targetReq.id, targetReq);
+    }
+  }
   if (!targetReq) {
     return res.status(404).json({ error: 'Manual funding request not found' });
   }
@@ -1645,6 +1744,7 @@ app.post('/api/admin/manual-fund/approve', (req: Request, res: Response) => {
 
   targetReq.status = 'approved';
   targetReq.updatedAt = new Date().toISOString();
+  await recordManualFundingRequestInFirestore(targetReq).catch(() => {});
 
   const userToCredit = db.users.get(targetReq.userId) || {
     id: targetReq.userId,
@@ -1661,11 +1761,15 @@ app.post('/api/admin/manual-fund/approve', (req: Request, res: Response) => {
     totalTransactionsCount: 0,
     createdAt: new Date().toISOString(),
   };
+  if (!db.users.has(userToCredit.id)) {
+    db.users.set(userToCredit.id, userToCredit);
+  }
 
   const txRef = `MANUAL-FUND-${Date.now()}`;
   const desc = `Manual bank deposit approved by Admin: ₦${targetReq.amount.toLocaleString()} (${targetReq.senderBank} / ${targetReq.senderName})`;
 
   db.creditWallet(userToCredit.id, targetReq.amount, txRef, desc);
+  await recordUserInFirestore(userToCredit).catch(() => {});
 
   const txId = `tx_${Date.now()}`;
   const tx: Transaction = {
@@ -1677,7 +1781,7 @@ app.post('/api/admin/manual-fund/approve', (req: Request, res: Response) => {
     userPhone: userToCredit.phone,
     userRole: userToCredit.role,
     serviceType: 'wallet_fund',
-    recipient: `${manualFundingConfig.bankName} (${manualFundingConfig.accountNumber})`,
+    recipient: `${db.manualFundingConfig.bankName} (${db.manualFundingConfig.accountNumber})`,
     amount: targetReq.amount,
     providerCost: 0,
     profit: 0,
@@ -1686,15 +1790,17 @@ app.post('/api/admin/manual-fund/approve', (req: Request, res: Response) => {
     paymentMethod: 'Manual Bank Deposit',
   };
   db.transactions.set(txId, tx);
+  db.saveToDisk();
+  await recordTransactionInFirestore(tx).catch(() => {});
 
-  db.addNotification({
+  persistNotification({
     userId: userToCredit.id,
     title: '🎉 Wallet Credited!',
     message: `Your manual funding request of ₦${targetReq.amount.toLocaleString()} has been approved and credited to your wallet!`,
     type: 'success',
   });
 
-  db.addAudit(admin.email, 'APPROVE_MANUAL_FUNDING', targetReq.userId, `Approved ₦${targetReq.amount}`);
+  persistAudit(admin.email, 'APPROVE_MANUAL_FUNDING', targetReq.userId, `Approved ₦${targetReq.amount}`);
 
   res.json({
     success: true,
@@ -1704,14 +1810,21 @@ app.post('/api/admin/manual-fund/approve', (req: Request, res: Response) => {
 });
 
 // Reject Manual Funding Request (Admin Only)
-app.post('/api/admin/manual-fund/reject', (req: Request, res: Response) => {
+app.post('/api/admin/manual-fund/reject', async (req: Request, res: Response) => {
   const admin = getAuthenticatedUser(req);
   if (admin.role !== 'admin') {
     return res.status(403).json({ error: 'Admin access required' });
   }
 
   const { requestId, reason } = req.body;
-  const targetReq = manualFundingRequests.find(r => r.id === requestId);
+  let targetReq = db.manualFundingRequests.get(requestId);
+  if (!targetReq) {
+    const remote = await fsGetDoc(`manual_funding_requests/${requestId}`, getCurrentUserToken()).catch(() => null);
+    if (remote?.ok && remote.data) {
+      targetReq = remote.data as ManualFundingRequest;
+      db.manualFundingRequests.set(targetReq.id, targetReq);
+    }
+  }
   if (!targetReq) {
     return res.status(404).json({ error: 'Manual funding request not found' });
   }
@@ -1719,15 +1832,16 @@ app.post('/api/admin/manual-fund/reject', (req: Request, res: Response) => {
   targetReq.status = 'rejected';
   targetReq.rejectionReason = reason || 'Payment proof could not be verified by Admin.';
   targetReq.updatedAt = new Date().toISOString();
+  await recordManualFundingRequestInFirestore(targetReq).catch(() => {});
 
-  db.addNotification({
+  persistNotification({
     userId: targetReq.userId,
     title: 'Manual Funding Request Rejected',
     message: `Your manual funding request of ₦${targetReq.amount.toLocaleString()} was not approved. Reason: ${targetReq.rejectionReason}`,
     type: 'warning',
   });
 
-  db.addAudit(admin.email, 'REJECT_MANUAL_FUNDING', targetReq.userId, `Rejected ₦${targetReq.amount}: ${targetReq.rejectionReason}`);
+  persistAudit(admin.email, 'REJECT_MANUAL_FUNDING', targetReq.userId, `Rejected ₦${targetReq.amount}: ${targetReq.rejectionReason}`);
 
   res.json({
     success: true,
@@ -1752,8 +1866,9 @@ app.put('/api/admin/billstack/config', async (req: Request, res: Response) => {
   if (user.role !== 'admin') {
     return res.status(403).json({ error: 'Admin access required' });
   }
-  const updated = await saveFirestoreBillStackConfig(req.body);
-  db.addAudit(user.email, 'UPDATE_BILLSTACK_CONFIG', 'BILLSTACK', JSON.stringify(req.body));
+  const payload = stripMaskedSecrets(req.body || {});
+  const updated = await saveFirestoreBillStackConfig(payload);
+  persistAudit(user.email, 'UPDATE_BILLSTACK_CONFIG', 'BILLSTACK', JSON.stringify(payload));
   res.json({ success: true, config: updated });
 });
 
@@ -1906,7 +2021,7 @@ app.post('/api/services/data/purchase', sensitiveSecurityCheck, async (req: Requ
     user.totalSavings += Math.max(0, 50);
     recordUserInFirestore(user).catch(() => {});
 
-    db.addNotification({
+    persistNotification({
       userId: user.id,
       title: 'Data Purchase Successful',
       message: `${plan.name} was successfully delivered to ${cleanPhone}. Ref: ${dispatch.reference}`,
@@ -2021,7 +2136,7 @@ app.post('/api/services/airtime/purchase', sensitiveSecurityCheck, async (req: R
     user.totalSavings += discountAmount;
     recordUserInFirestore(user).catch(() => {});
 
-    db.addNotification({
+    persistNotification({
       userId: user.id,
       title: 'Airtime Recharged!',
       message: `₦${numAmount.toLocaleString()} ${network.toUpperCase()} airtime successfully sent to ${cleanPhone}. Ref: ${dispatch.reference}`,
@@ -2162,7 +2277,7 @@ app.post('/api/services/electricity/purchase', sensitiveSecurityCheck, async (re
 
     recordUserInFirestore(user).catch(() => {});
 
-    db.addNotification({
+    persistNotification({
       userId: user.id,
       title: 'Electricity Token Generated',
       message: `Your token for meter ${meterNumber} is: ${dispatch.token}`,
@@ -2297,7 +2412,7 @@ app.post('/api/services/cable/purchase', sensitiveSecurityCheck, async (req: Req
 
     recordUserInFirestore(user).catch(() => {});
 
-    db.addNotification({
+    persistNotification({
       userId: user.id,
       title: 'Cable TV Subscription Renewed',
       message: `${pkg.name} renewed for IUC: ${cleanIuc}. Ref: ${dispatch.reference}`,
@@ -2418,7 +2533,7 @@ app.post('/api/services/exam/purchase', sensitiveSecurityCheck, async (req: Requ
       dispatch.transaction.token = generatedTokens.join(' | ');
     }
 
-    db.addNotification({
+    persistNotification({
       userId: user.id,
       title: 'Exam PIN Generated',
       message: `Your ${pinItem.exam} PIN was generated successfully: ${generatedTokens[0]}`,
@@ -2442,9 +2557,21 @@ app.post('/api/services/exam/purchase', sensitiveSecurityCheck, async (req: Requ
 });
 
 // ==================== TRANSACTIONS ====================
-app.get('/api/transactions', (req: Request, res: Response) => {
+app.get('/api/transactions', async (req: Request, res: Response) => {
   const user = getAuthenticatedUser(req);
   const { status, service, search } = req.query;
+
+  const token = getCurrentUserToken();
+  if (token || isServiceAccountConfigured()) {
+    const filters = user.role === 'admin' ? [] : [{ field: 'userId', value: user.id }];
+    const liveRes = await fsRunQuery('transactions', filters, 200, token).catch(() => null);
+    if (liveRes?.ok && Array.isArray(liveRes.documents) && liveRes.documents.length > 0) {
+      liveRes.documents.forEach((raw: any) => {
+        if (raw?.id) db.transactions.set(raw.id, raw as Transaction);
+      });
+      db.saveToDisk();
+    }
+  }
 
   let list = Array.from(db.transactions.values());
 
@@ -2491,25 +2618,42 @@ app.get('/api/transactions/:id', (req: Request, res: Response) => {
 });
 
 // ==================== NOTIFICATIONS ====================
-app.get('/api/notifications', (req: Request, res: Response) => {
+app.get('/api/notifications', async (req: Request, res: Response) => {
   const user = getAuthenticatedUser(req);
+  const liveRes = await fsRunQuery('notifications', [{ field: 'userId', value: user.id }], 100, getCurrentUserToken()).catch(() => null);
+  if (liveRes?.ok && Array.isArray(liveRes.documents)) {
+    liveRes.documents.forEach((n: any) => {
+      if (n?.id) db.notifications.set(n.id, n as NotificationItem);
+    });
+    db.saveToDisk();
+  }
   const notifs = Array.from(db.notifications.values())
     .filter(n => n.userId === user.id)
     .sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   res.json({ notifications: notifs });
 });
 
-app.post('/api/notifications/:id/read', (req: Request, res: Response) => {
+app.post('/api/notifications/:id/read', async (req: Request, res: Response) => {
   const notif = db.notifications.get(req.params.id);
   if (notif) {
     notif.read = true;
+    db.saveToDisk();
+    await recordNotificationInFirestore(notif).catch(() => {});
   }
   res.json({ success: true });
 });
 
 // ==================== SUPPORT TICKETS ====================
-app.get('/api/support/tickets', (req: Request, res: Response) => {
+app.get('/api/support/tickets', async (req: Request, res: Response) => {
   const user = getAuthenticatedUser(req);
+  const filters = user.role === 'admin' ? [] : [{ field: 'userId', value: user.id }];
+  const liveRes = await fsRunQuery('supportTickets', filters, 200, getCurrentUserToken()).catch(() => null);
+  if (liveRes?.ok && Array.isArray(liveRes.documents)) {
+    liveRes.documents.forEach((t: any) => {
+      if (t?.id) db.tickets.set(t.id, t as SupportTicket);
+    });
+    db.saveToDisk();
+  }
   let list = Array.from(db.tickets.values());
   if (user.role !== 'admin') {
     list = list.filter(t => t.userId === user.id);
@@ -2518,7 +2662,7 @@ app.get('/api/support/tickets', (req: Request, res: Response) => {
   res.json({ tickets: list });
 });
 
-app.post('/api/support/tickets', (req: Request, res: Response) => {
+app.post('/api/support/tickets', async (req: Request, res: Response) => {
   const user = getAuthenticatedUser(req);
   const { subject, category, message, priority } = req.body;
 
@@ -2551,13 +2695,21 @@ app.post('/api/support/tickets', (req: Request, res: Response) => {
   };
 
   db.tickets.set(id, ticket);
+  await recordTicketInFirestore(ticket).catch(() => {});
   res.json({ success: true, ticket });
 });
 
-app.post('/api/support/tickets/:id/reply', (req: Request, res: Response) => {
+app.post('/api/support/tickets/:id/reply', async (req: Request, res: Response) => {
   const user = getAuthenticatedUser(req);
   const { message } = req.body;
-  const ticket = db.tickets.get(req.params.id);
+  let ticket = db.tickets.get(req.params.id);
+  if (!ticket) {
+    const remote = await fsGetDoc(`supportTickets/${req.params.id}`, getCurrentUserToken()).catch(() => null);
+    if (remote?.ok && remote.data) {
+      ticket = remote.data as SupportTicket;
+      db.tickets.set(ticket.id, ticket);
+    }
+  }
 
   if (!ticket) {
     return res.status(404).json({ error: 'Ticket not found' });
@@ -2579,19 +2731,28 @@ app.post('/api/support/tickets/:id/reply', (req: Request, res: Response) => {
     ticket.status = 'in_progress';
   }
 
+  await recordTicketInFirestore(ticket).catch(() => {});
   res.json({ success: true, ticket });
 });
 
-app.put('/api/support/tickets/:id/status', (req: Request, res: Response) => {
+app.put('/api/support/tickets/:id/status', async (req: Request, res: Response) => {
   const user = getAuthenticatedUser(req);
   if (user.role !== 'admin') {
     return res.status(403).json({ error: 'Unauthorized' });
   }
   const { status } = req.body;
-  const ticket = db.tickets.get(req.params.id);
+  let ticket = db.tickets.get(req.params.id);
+  if (!ticket) {
+    const remote = await fsGetDoc(`supportTickets/${req.params.id}`, getCurrentUserToken()).catch(() => null);
+    if (remote?.ok && remote.data) {
+      ticket = remote.data as SupportTicket;
+      db.tickets.set(ticket.id, ticket);
+    }
+  }
   if (!ticket) return res.status(404).json({ error: 'Ticket not found' });
   ticket.status = status;
   ticket.updatedAt = new Date().toISOString();
+  await recordTicketInFirestore(ticket).catch(() => {});
   res.json({ success: true, ticket });
 });
 
@@ -2618,7 +2779,7 @@ app.get('/api/reseller/stats', (req: Request, res: Response) => {
   });
 });
 
-app.post('/api/reseller/upgrade', (req: Request, res: Response) => {
+app.post('/api/reseller/upgrade', async (req: Request, res: Response) => {
   const user = getAuthenticatedUser(req);
   if (user.role === 'reseller' || user.role === 'admin') {
     return res.json({ success: true, message: 'You already have Reseller/Admin tier', user });
@@ -2643,8 +2804,11 @@ app.post('/api/reseller/upgrade', (req: Request, res: Response) => {
   }
 
   user.role = 'reseller';
+  db.users.set(user.id, user);
+  db.saveToDisk();
+  await recordUserInFirestore(user).catch(() => {});
 
-  db.addNotification({
+  persistNotification({
     userId: user.id,
     title: '🎉 Congratulations! Upgraded to Reseller',
     message: 'You now enjoy discounted reseller prices across all data plans and airtime.',
@@ -2653,7 +2817,7 @@ app.post('/api/reseller/upgrade', (req: Request, res: Response) => {
 
   res.json({
     success: true,
-    user,
+    user: sanitizeUser(user),
     message: 'Account successfully upgraded to Reseller!',
   });
 });
@@ -2746,13 +2910,14 @@ app.post('/api/admin/users/create', async (req: Request, res: Response) => {
 
   db.users.set(newUser.id, newUser);
   db.virtualAccounts.set(newUser.id, []);
+  db.saveToDisk();
 
   // Save to Firestore permanently
   await recordUserInFirestore(newUser).catch(err => console.warn('Firestore admin user create error:', err));
 
-  db.addAudit(admin.email, 'CREATE_USER_BY_ADMIN', newUser.email, `Role: ${newUser.role}, Initial Balance: ₦${initialBalance}`);
+  persistAudit(admin.email, 'CREATE_USER_BY_ADMIN', newUser.email, `Role: ${newUser.role}, Initial Balance: ₦${initialBalance}`);
 
-  db.addNotification({
+  persistNotification({
     userId: newUser.id,
     title: 'Account Created by Admin',
     message: `Welcome to NPay! Your account has been registered by Super Admin as ${newUser.role.toUpperCase()}.`,
@@ -2762,7 +2927,7 @@ app.post('/api/admin/users/create', async (req: Request, res: Response) => {
   res.json({ success: true, user: newUser, message: `User "${newUser.name}" registered successfully!` });
 });
 
-app.put('/api/admin/users/:id', (req: Request, res: Response) => {
+app.put('/api/admin/users/:id', async (req: Request, res: Response) => {
   const admin = getAuthenticatedUser(req);
   if (admin.role !== 'admin') {
     return res.status(403).json({ error: 'Admin access required' });
@@ -2774,8 +2939,10 @@ app.put('/api/admin/users/:id', (req: Request, res: Response) => {
   if (role) target.role = role;
   if (status) target.status = status;
 
-  recordUserInFirestore(target).catch(() => {});
-  db.addAudit(admin.email, 'UPDATE_USER', target.email, `Role: ${role}, Status: ${status}`);
+  db.users.set(target.id, target);
+  db.saveToDisk();
+  await recordUserInFirestore(target).catch(() => {});
+  persistAudit(admin.email, 'UPDATE_USER', target.email, `Role: ${role}, Status: ${status}`);
   res.json({ success: true, user: target });
 });
 
@@ -2792,12 +2959,13 @@ app.delete('/api/admin/users/:id', async (req: Request, res: Response) => {
   }
 
   db.users.delete(req.params.id);
+  db.virtualAccounts.delete(req.params.id);
   await deleteUserFromFirestore(req.params.id).catch(() => {});
-  db.addAudit(admin.email, 'DELETE_USER', target.email, `Deleted user ${target.id}`);
+  persistAudit(admin.email, 'DELETE_USER', target.email, `Deleted user ${target.id}`);
   res.json({ success: true, message: `User "${target.name}" removed permanently` });
 });
 
-app.post('/api/admin/users/:id/wallet-adjust', (req: Request, res: Response) => {
+app.post('/api/admin/users/:id/wallet-adjust', async (req: Request, res: Response) => {
   const admin = getAuthenticatedUser(req);
   if (admin.role !== 'admin') {
     return res.status(403).json({ error: 'Admin access required' });
@@ -2811,7 +2979,7 @@ app.post('/api/admin/users/:id/wallet-adjust', (req: Request, res: Response) => 
     return res.status(400).json({ error: 'Valid amount and audit reason required' });
   }
 
-  const ref = `ADJ-${Date.now()}`;
+  const ref = `ADM-ADJ-${Date.now()}`;
   let result;
   if (type === 'credit') {
     result = db.creditWallet(target.id, numAmount, ref, `Admin Adjustment: ${reason}`);
@@ -2823,12 +2991,33 @@ app.post('/api/admin/users/:id/wallet-adjust', (req: Request, res: Response) => 
     return res.status(400).json({ error: result.error });
   }
 
-  recordUserInFirestore(target).catch(() => {});
+  const adjTx: Transaction = {
+    id: ref,
+    reference: ref,
+    userId: target.id,
+    userName: target.name,
+    userEmail: target.email,
+    userPhone: target.phone,
+    userRole: target.role,
+    serviceType: 'admin_adjustment',
+    amount: numAmount,
+    providerCost: numAmount,
+    profit: 0,
+    status: 'successful',
+    recipient: target.phone,
+    date: new Date().toISOString(),
+    description: `Admin ${type}: ${reason}`,
+  };
+  db.transactions.set(adjTx.id, adjTx);
+  db.saveToDisk();
+
+  await recordUserInFirestore(target).catch(() => {});
+  await recordTransactionInFirestore(adjTx).catch(() => {});
 
   // Record audit log
-  db.addAudit(admin.email, `WALLET_${type.toUpperCase()}`, target.email, `Amount: ₦${numAmount}, Reason: ${reason}`);
+  persistAudit(admin.email, `WALLET_${type.toUpperCase()}`, target.email, `Amount: ₦${numAmount}, Reason: ${reason}`);
 
-  db.addNotification({
+  persistNotification({
     userId: target.id,
     title: `Wallet ${type === 'credit' ? 'Credited' : 'Debited'} by Admin`,
     message: `Your wallet was ${type === 'credit' ? 'credited' : 'debited'} with ₦${numAmount.toLocaleString()}. Reason: ${reason}`,
@@ -2839,16 +3028,16 @@ app.post('/api/admin/users/:id/wallet-adjust', (req: Request, res: Response) => 
 });
 
 // Admin Data Plans CRUD
-app.get('/api/admin/data-plans', (req: Request, res: Response) => {
+app.get('/api/admin/data-plans', (_req: Request, res: Response) => {
   res.json({ plans: Array.from(db.dataPlans.values()) });
 });
 
-app.post('/api/admin/data-plans', (req: Request, res: Response) => {
+app.post('/api/admin/data-plans', async (req: Request, res: Response) => {
   const admin = getAuthenticatedUser(req);
   if (admin.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
 
-  const { network, name, size, validity, planType, providerCost, customerPrice, resellerPrice, plan_id, planCode } = req.body;
-  const id = `plan_${Date.now()}`;
+  const { id: requestedId, network, name, size, validity, planType, providerCost, customerPrice, resellerPrice, plan_id, planCode, isActive } = req.body;
+  const id = (typeof requestedId === 'string' && requestedId.trim()) ? requestedId.trim() : `plan_${Date.now()}`;
   const activePlanId = String(plan_id || planCode || `p_${Date.now().toString().slice(-4)}`).trim();
 
   const plan: DataPlan = {
@@ -2863,16 +3052,16 @@ app.post('/api/admin/data-plans', (req: Request, res: Response) => {
     providerCost: parseFloat(providerCost) || 250,
     customerPrice: parseFloat(customerPrice) || 300,
     resellerPrice: parseFloat(resellerPrice) || 280,
-    isActive: true,
+    isActive: isActive !== false,
   };
 
   db.dataPlans.set(id, plan);
-  recordDataPlanInFirestore(plan).catch(() => {});
-  db.addAudit(admin.email, 'CREATE_DATA_PLAN', name, JSON.stringify(plan));
+  await recordDataPlanInFirestore(plan).catch(() => {});
+  persistAudit(admin.email, 'CREATE_DATA_PLAN', name, JSON.stringify(plan));
   res.json({ success: true, plan });
 });
 
-app.put('/api/admin/data-plans/:id', (req: Request, res: Response) => {
+app.put('/api/admin/data-plans/:id', async (req: Request, res: Response) => {
   const admin = getAuthenticatedUser(req);
   if (admin.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
 
@@ -2885,20 +3074,21 @@ app.put('/api/admin/data-plans/:id', (req: Request, res: Response) => {
   if (!plan.plan_id && plan.planCode) plan.plan_id = plan.planCode;
   if (!plan.planCode && plan.plan_id) plan.planCode = plan.plan_id;
 
-  recordDataPlanInFirestore(plan).catch(() => {});
-  db.addAudit(admin.email, 'UPDATE_DATA_PLAN', plan.name, JSON.stringify(req.body));
+  db.dataPlans.set(plan.id, plan);
+  await recordDataPlanInFirestore(plan).catch(() => {});
+  persistAudit(admin.email, 'UPDATE_DATA_PLAN', plan.name, JSON.stringify(req.body));
   res.json({ success: true, plan });
 });
 
-app.delete('/api/admin/data-plans/:id', (req: Request, res: Response) => {
+app.delete('/api/admin/data-plans/:id', async (req: Request, res: Response) => {
   const admin = getAuthenticatedUser(req);
   if (admin.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
 
   const plan = db.dataPlans.get(req.params.id);
+  db.dataPlans.delete(req.params.id);
+  await deleteDataPlanFromFirestore(req.params.id).catch(() => {});
   if (plan) {
-    db.dataPlans.delete(req.params.id);
-    deleteDataPlanFromFirestore(req.params.id).catch(() => {});
-    db.addAudit(admin.email, 'DELETE_DATA_PLAN', plan.name, `Deleted plan ${req.params.id}`);
+    persistAudit(admin.email, 'DELETE_DATA_PLAN', plan.name, `Deleted plan ${req.params.id}`);
   }
   res.json({ success: true });
 });
@@ -2908,7 +3098,7 @@ app.get('/api/admin/airtime-discounts', (_req: Request, res: Response) => {
   res.json({ discounts: Array.from(db.airtimeDiscounts.values()) });
 });
 
-app.put('/api/admin/airtime-discounts/:network', (req: Request, res: Response) => {
+app.put('/api/admin/airtime-discounts/:network', async (req: Request, res: Response) => {
   const admin = getAuthenticatedUser(req);
   if (admin.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
 
@@ -2927,8 +3117,8 @@ app.put('/api/admin/airtime-discounts/:network', (req: Request, res: Response) =
   Object.assign(discount, req.body);
   if (req.body.plan_id) discount.plan_id = String(req.body.plan_id).trim();
   db.airtimeDiscounts.set(networkKey, discount);
-  recordAirtimeDiscountInFirestore(discount).catch(() => {});
-  db.addAudit(admin.email, 'UPDATE_AIRTIME_DISCOUNT', networkKey, JSON.stringify(req.body));
+  await recordAirtimeDiscountInFirestore(discount).catch(() => {});
+  persistAudit(admin.email, 'UPDATE_AIRTIME_DISCOUNT', networkKey, JSON.stringify(req.body));
   res.json({ success: true, discount });
 });
 
@@ -2937,7 +3127,7 @@ app.get('/api/admin/electricity-discos', (_req: Request, res: Response) => {
   res.json({ discos: Array.from(db.electricityDiscos.values()) });
 });
 
-app.post('/api/admin/electricity-discos', (req: Request, res: Response) => {
+app.post('/api/admin/electricity-discos', async (req: Request, res: Response) => {
   const admin = getAuthenticatedUser(req);
   if (admin.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
 
@@ -2957,12 +3147,12 @@ app.post('/api/admin/electricity-discos', (req: Request, res: Response) => {
     isActive: isActive !== false,
   };
   db.electricityDiscos.set(discoId, item);
-  recordElectricityDiscoInFirestore(item).catch(() => {});
-  db.addAudit(admin.email, 'CREATE_ELECTRICITY_DISCO', item.name, JSON.stringify(item));
+  await recordElectricityDiscoInFirestore(item).catch(() => {});
+  persistAudit(admin.email, 'CREATE_ELECTRICITY_DISCO', item.name, JSON.stringify(item));
   res.json({ success: true, disco: item });
 });
 
-app.put('/api/admin/electricity-discos/:id', (req: Request, res: Response) => {
+app.put('/api/admin/electricity-discos/:id', async (req: Request, res: Response) => {
   const admin = getAuthenticatedUser(req);
   if (admin.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
 
@@ -2975,18 +3165,19 @@ app.put('/api/admin/electricity-discos/:id', (req: Request, res: Response) => {
   if (req.body.code && !disco.plan_id) disco.plan_id = String(req.body.code).trim();
   if (req.body.code && !disco.network_id) disco.network_id = String(req.body.code).trim();
 
-  recordElectricityDiscoInFirestore(disco).catch(() => {});
-  db.addAudit(admin.email, 'UPDATE_ELECTRICITY_DISCO', disco.name, JSON.stringify(req.body));
+  db.electricityDiscos.set(disco.id, disco);
+  await recordElectricityDiscoInFirestore(disco).catch(() => {});
+  persistAudit(admin.email, 'UPDATE_ELECTRICITY_DISCO', disco.name, JSON.stringify(req.body));
   res.json({ success: true, disco });
 });
 
-app.delete('/api/admin/electricity-discos/:id', (req: Request, res: Response) => {
+app.delete('/api/admin/electricity-discos/:id', async (req: Request, res: Response) => {
   const admin = getAuthenticatedUser(req);
   if (admin.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
 
   db.electricityDiscos.delete(req.params.id);
-  deleteElectricityDiscoFromFirestore(req.params.id).catch(() => {});
-  db.addAudit(admin.email, 'DELETE_ELECTRICITY_DISCO', req.params.id, 'Deleted Disco');
+  await deleteElectricityDiscoFromFirestore(req.params.id).catch(() => {});
+  persistAudit(admin.email, 'DELETE_ELECTRICITY_DISCO', req.params.id, 'Deleted Disco');
   res.json({ success: true });
 });
 
@@ -2995,12 +3186,12 @@ app.get('/api/admin/cable-packages', (_req: Request, res: Response) => {
   res.json({ packages: Array.from(db.cablePackages.values()) });
 });
 
-app.post('/api/admin/cable-packages', (req: Request, res: Response) => {
+app.post('/api/admin/cable-packages', async (req: Request, res: Response) => {
   const admin = getAuthenticatedUser(req);
   if (admin.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
 
-  const { provider, name, code, plan_id, network_id, price, providerCost, isActive } = req.body;
-  const id = `cable_${Date.now()}`;
+  const { id: requestedId, provider, name, code, plan_id, network_id, price, providerCost, isActive } = req.body;
+  const id = (typeof requestedId === 'string' && requestedId.trim()) ? requestedId.trim() : `cable_${Date.now()}`;
   const activePlanId = String(plan_id || code || `code_${Date.now()}`).trim();
   const activeNetworkId = String(network_id || provider || 'dstv').trim();
 
@@ -3016,12 +3207,12 @@ app.post('/api/admin/cable-packages', (req: Request, res: Response) => {
     isActive: isActive !== false,
   };
   db.cablePackages.set(id, pkg);
-  recordCablePackageInFirestore(pkg).catch(() => {});
-  db.addAudit(admin.email, 'CREATE_CABLE_PACKAGE', pkg.name, JSON.stringify(pkg));
+  await recordCablePackageInFirestore(pkg).catch(() => {});
+  persistAudit(admin.email, 'CREATE_CABLE_PACKAGE', pkg.name, JSON.stringify(pkg));
   res.json({ success: true, package: pkg });
 });
 
-app.put('/api/admin/cable-packages/:id', (req: Request, res: Response) => {
+app.put('/api/admin/cable-packages/:id', async (req: Request, res: Response) => {
   const admin = getAuthenticatedUser(req);
   if (admin.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
 
@@ -3033,18 +3224,19 @@ app.put('/api/admin/cable-packages/:id', (req: Request, res: Response) => {
   if (req.body.network_id) pkg.network_id = String(req.body.network_id).trim();
   if (req.body.code && !pkg.plan_id) pkg.plan_id = String(req.body.code).trim();
 
-  recordCablePackageInFirestore(pkg).catch(() => {});
-  db.addAudit(admin.email, 'UPDATE_CABLE_PACKAGE', pkg.name, JSON.stringify(req.body));
+  db.cablePackages.set(pkg.id, pkg);
+  await recordCablePackageInFirestore(pkg).catch(() => {});
+  persistAudit(admin.email, 'UPDATE_CABLE_PACKAGE', pkg.name, JSON.stringify(req.body));
   res.json({ success: true, package: pkg });
 });
 
-app.delete('/api/admin/cable-packages/:id', (req: Request, res: Response) => {
+app.delete('/api/admin/cable-packages/:id', async (req: Request, res: Response) => {
   const admin = getAuthenticatedUser(req);
   if (admin.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
 
   db.cablePackages.delete(req.params.id);
-  deleteCablePackageFromFirestore(req.params.id).catch(() => {});
-  db.addAudit(admin.email, 'DELETE_CABLE_PACKAGE', req.params.id, 'Deleted Package');
+  await deleteCablePackageFromFirestore(req.params.id).catch(() => {});
+  persistAudit(admin.email, 'DELETE_CABLE_PACKAGE', req.params.id, 'Deleted Package');
   res.json({ success: true });
 });
 
@@ -3053,12 +3245,12 @@ app.get('/api/admin/exam-pins', (_req: Request, res: Response) => {
   res.json({ pins: Array.from(db.examPins.values()) });
 });
 
-app.post('/api/admin/exam-pins', (req: Request, res: Response) => {
+app.post('/api/admin/exam-pins', async (req: Request, res: Response) => {
   const admin = getAuthenticatedUser(req);
   if (admin.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
 
-  const { exam, name, code, plan_id, network_id, price, providerCost, stockAvailable, isActive } = req.body;
-  const id = `pin_${Date.now()}`;
+  const { id: requestedId, exam, name, code, plan_id, network_id, price, providerCost, stockAvailable, isActive } = req.body;
+  const id = (typeof requestedId === 'string' && requestedId.trim()) ? requestedId.trim() : `pin_${Date.now()}`;
   const activePlanId = String(plan_id || code || (exam || 'WAEC')).trim();
   const activeNetworkId = String(network_id || exam || 'WAEC').trim();
 
@@ -3075,12 +3267,12 @@ app.post('/api/admin/exam-pins', (req: Request, res: Response) => {
     isActive: isActive !== false,
   };
   db.examPins.set(id, pin);
-  recordExamPinInFirestore(pin).catch(() => {});
-  db.addAudit(admin.email, 'CREATE_EXAM_PIN', pin.name, JSON.stringify(pin));
+  await recordExamPinInFirestore(pin).catch(() => {});
+  persistAudit(admin.email, 'CREATE_EXAM_PIN', pin.name, JSON.stringify(pin));
   res.json({ success: true, pin });
 });
 
-app.put('/api/admin/exam-pins/:id', (req: Request, res: Response) => {
+app.put('/api/admin/exam-pins/:id', async (req: Request, res: Response) => {
   const admin = getAuthenticatedUser(req);
   if (admin.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
 
@@ -3091,23 +3283,24 @@ app.put('/api/admin/exam-pins/:id', (req: Request, res: Response) => {
   if (req.body.plan_id) pin.plan_id = String(req.body.plan_id).trim();
   if (req.body.network_id) pin.network_id = String(req.body.network_id).trim();
 
-  recordExamPinInFirestore(pin).catch(() => {});
-  db.addAudit(admin.email, 'UPDATE_EXAM_PIN', pin.name, JSON.stringify(req.body));
+  db.examPins.set(pin.id, pin);
+  await recordExamPinInFirestore(pin).catch(() => {});
+  persistAudit(admin.email, 'UPDATE_EXAM_PIN', pin.name, JSON.stringify(req.body));
   res.json({ success: true, pin });
 });
 
-app.delete('/api/admin/exam-pins/:id', (req: Request, res: Response) => {
+app.delete('/api/admin/exam-pins/:id', async (req: Request, res: Response) => {
   const admin = getAuthenticatedUser(req);
   if (admin.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
 
   db.examPins.delete(req.params.id);
-  deleteExamPinFromFirestore(req.params.id).catch(() => {});
-  db.addAudit(admin.email, 'DELETE_EXAM_PIN', req.params.id, 'Deleted Exam PIN');
+  await deleteExamPinFromFirestore(req.params.id).catch(() => {});
+  persistAudit(admin.email, 'DELETE_EXAM_PIN', req.params.id, 'Deleted Exam PIN');
   res.json({ success: true });
 });
 
 // Admin Providers
-app.get('/api/admin/providers', (req: Request, res: Response) => {
+app.get('/api/admin/providers', (_req: Request, res: Response) => {
   res.json({ providers: Array.from(db.providers.values()) });
 });
 
@@ -3118,8 +3311,10 @@ app.put('/api/admin/providers/:id', (req: Request, res: Response) => {
   const provider = db.providers.get(req.params.id);
   if (!provider) return res.status(404).json({ error: 'Provider not found' });
 
-  Object.assign(provider, req.body);
-  db.addAudit(admin.email, 'UPDATE_PROVIDER_CONFIG', provider.name, JSON.stringify(req.body));
+  Object.assign(provider, stripMaskedSecrets(req.body || {}));
+  db.providers.set(provider.id, provider);
+  db.saveToDisk();
+  persistAudit(admin.email, 'UPDATE_PROVIDER_CONFIG', provider.name, JSON.stringify(stripMaskedSecrets(req.body || {})));
   res.json({ success: true, provider });
 });
 
@@ -3136,9 +3331,10 @@ app.put('/api/admin/vtu-naija/config', async (req: Request, res: Response) => {
   const incoming = req.body;
   if (!incoming) return res.status(400).json({ error: 'Invalid configuration payload' });
 
-  const config = await saveFirestoreVTUConfig(incoming);
+  const cleanIncoming = stripMaskedSecrets(incoming);
+  const config = await saveFirestoreVTUConfig(cleanIncoming);
 
-  db.addAudit(admin.email, 'UPDATE_VTUNAIJA_CONFIG', 'VTUNaija Gateway (Firestore)', JSON.stringify({
+  persistAudit(admin.email, 'UPDATE_VTUNAIJA_CONFIG', 'VTUNaija Gateway (Firestore)', JSON.stringify({
     baseUrl: config.baseUrl,
     networkIds: config.networkIds,
     isLive: config.isLive,
@@ -3184,6 +3380,7 @@ app.post('/api/admin/vtu-naija/ping', async (req: Request, res: Response) => {
   cfg.lastTested = new Date().toISOString();
   cfg.lastStatus = 'connected';
   cfg.balance = balance;
+  db.saveToDisk();
 
   res.json({
     success: true,
@@ -3209,7 +3406,7 @@ app.put('/api/admin/gateway/routing', async (req: Request, res: Response) => {
   if (!incoming) return res.status(400).json({ error: 'Invalid routing payload' });
 
   const routing = await saveFirestoreServiceRouting(incoming);
-  db.addAudit(admin.email, 'UPDATE_GATEWAY_ROUTING', 'Gateway Routing', JSON.stringify(routing));
+  persistAudit(admin.email, 'UPDATE_GATEWAY_ROUTING', 'Gateway Routing', JSON.stringify(routing));
   res.json({ success: true, routing });
 });
 
@@ -3226,9 +3423,10 @@ app.put('/api/admin/ncwallet/config', async (req: Request, res: Response) => {
   const incoming = req.body;
   if (!incoming) return res.status(400).json({ error: 'Invalid configuration payload' });
 
-  const config = await saveFirestoreNCWalletConfig(incoming);
+  const cleanIncoming = stripMaskedSecrets(incoming);
+  const config = await saveFirestoreNCWalletConfig(cleanIncoming);
 
-  db.addAudit(admin.email, 'UPDATE_NCWALLET_CONFIG', 'NCwallet Gateway (Firestore)', JSON.stringify({
+  persistAudit(admin.email, 'UPDATE_NCWALLET_CONFIG', 'NCwallet Gateway (Firestore)', JSON.stringify({
     baseUrl: config.baseUrl,
     networkIds: config.networkIds,
     isLive: config.isLive,
@@ -3278,6 +3476,7 @@ app.post('/api/admin/ncwallet/ping', async (req: Request, res: Response) => {
   cfg.lastTested = new Date().toISOString();
   cfg.lastStatus = liveSuccess ? 'connected' : (cfg.apiKey && cfg.apiKey !== 'NCWALLET_TOKEN_KEY' ? 'error' : 'unconfigured');
   cfg.balance = balance;
+  db.saveToDisk();
 
   res.json({
     success: liveSuccess,
@@ -3302,9 +3501,10 @@ app.put('/api/admin/unitybills/config', async (req: Request, res: Response) => {
   const incoming = req.body;
   if (!incoming) return res.status(400).json({ error: 'Invalid configuration payload' });
 
-  const config = await saveFirestoreUnityBillsConfig(incoming);
+  const cleanIncoming = stripMaskedSecrets(incoming);
+  const config = await saveFirestoreUnityBillsConfig(cleanIncoming);
 
-  db.addAudit(admin.email, 'UPDATE_UNITYBILLS_CONFIG', 'UnityBills Gateway (Firestore)', JSON.stringify({
+  persistAudit(admin.email, 'UPDATE_UNITYBILLS_CONFIG', 'UnityBills Gateway (Firestore)', JSON.stringify({
     baseUrl: config.baseUrl,
     networkIds: config.networkIds,
     isLive: config.isLive,
@@ -3326,15 +3526,9 @@ app.get(['/api/admin/webhook-logs', '/api/admin/webhook-logs/'], async (req: Req
   const admin = getAuthenticatedUser(req);
   if (admin.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
 
-  if (!auth.currentUser) {
-    return res.status(200).json({ success: true, logs: [] });
-  }
-
   try {
-    const logsCol = collection(firestoreDb, 'webhook_logs');
-    const snap = await getDocs(logsCol);
-    const logs = snap.docs
-      .map(docSnap => docSnap.data())
+    const qRes = await fsRunQuery('webhook_logs', [], 50, getCurrentUserToken());
+    const logs = (qRes.ok ? qRes.documents : [])
       .sort((a: any, b: any) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime())
       .slice(0, 50);
 
@@ -3345,7 +3539,7 @@ app.get(['/api/admin/webhook-logs', '/api/admin/webhook-logs/'], async (req: Req
 });
 
 // Admin Refund Transaction
-app.post('/api/admin/transactions/refund/:id', (req: Request, res: Response) => {
+app.post('/api/admin/transactions/refund/:id', async (req: Request, res: Response) => {
   const admin = getAuthenticatedUser(req);
   if (admin.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
 
@@ -3353,14 +3547,32 @@ app.post('/api/admin/transactions/refund/:id', (req: Request, res: Response) => 
   const ok = db.reverseTransaction(req.params.id, reason || 'Manual Admin Refund');
   if (!ok) return res.status(400).json({ error: 'Cannot refund this transaction' });
 
-  db.addAudit(admin.email, 'TRANSACTION_REFUND', req.params.id, reason || 'Admin Refund');
+  const tx = db.transactions.get(req.params.id);
+  if (tx) {
+    await recordTransactionInFirestore(tx).catch(() => {});
+    const txUser = db.users.get(tx.userId);
+    if (txUser) {
+      await recordUserInFirestore(txUser).catch(() => {});
+    }
+  }
+  persistAudit(admin.email, 'TRANSACTION_REFUND', req.params.id, reason || 'Admin Refund');
   res.json({ success: true, message: 'Transaction refunded and customer wallet credited' });
 });
 
 // Admin Audit Logs
-app.get('/api/admin/audit-logs', (req: Request, res: Response) => {
+app.get('/api/admin/audit-logs', async (req: Request, res: Response) => {
   const admin = getAuthenticatedUser(req);
   if (admin.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
+  const liveRes = await fsRunQuery('auditLogs', [], 100, getCurrentUserToken()).catch(() => null);
+  if (liveRes?.ok && Array.isArray(liveRes.documents) && liveRes.documents.length > 0) {
+    const merged = new Map<string, AuditLog>();
+    db.auditLogs.forEach(a => merged.set(a.id, a));
+    liveRes.documents.forEach((a: any) => { if (a?.id) merged.set(a.id, a as AuditLog); });
+    db.auditLogs = Array.from(merged.values()).sort(
+      (a, b) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime()
+    );
+    db.saveToDisk();
+  }
   res.json({ auditLogs: db.auditLogs.slice(0, 100) });
 });
 

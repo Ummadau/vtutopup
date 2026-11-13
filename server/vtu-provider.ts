@@ -405,5 +405,9 @@ export {
   initializeFirestoreData,
   resolveGatewayDataPlanCode,
   recordTransactionInFirestore,
+  recordTicketInFirestore,
+  recordNotificationInFirestore,
+  recordAuditLogInFirestore,
 } from './vtu-dispatcher.ts';
+
 

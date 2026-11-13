@@ -17,7 +17,7 @@ import {
 } from 'firebase/auth';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { auth, firestoreDb, apiFetch } from '../lib/firebase.ts';
-import { syncUserToFirestore, setUser } from '../lib/firebaseService.ts';
+import { getUser, setUser } from '../lib/firebaseService.ts';
 import { Logo } from './Logo.tsx';
 import { User } from '../types/index.ts';
 
@@ -223,28 +223,38 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       }
 
       // 4. Fallback ONLY if Firebase Auth already verified the user's password
+      let isFallbackUser = false;
       if (!authedUser && fbAuthed) {
         try {
-          const qUsers = query(collection(firestoreDb, 'users'), where('email', '==', cleanIdentifier));
-          const snap = await getDocs(qUsers).catch(() => null);
-          if (snap && !snap.empty) {
-            authedUser = snap.docs[0].data() as User;
-          } else if (fbUid) {
-            authedUser = {
-              id: fbUid,
-              name: cleanIdentifier.split('@')[0],
-              email: cleanIdentifier,
-              phone: '',
-              role: (cleanIdentifier === 'naeemummadau@gmail.com' || cleanIdentifier === 'ahmadnaim2877@gmail.com') ? 'admin' : 'customer',
-              status: 'active',
-              isVerified: true,
-              referralCode: 'NPAY' + Math.floor(100 + Math.random() * 900),
-              walletBalance: 0,
-              totalSavings: 0,
-              referralEarnings: 0,
-              totalTransactionsCount: 0,
-              createdAt: new Date().toISOString(),
-            };
+          if (fbUid) {
+            const directUser = await getUser(fbUid).catch(() => null);
+            if (directUser) {
+              authedUser = directUser;
+            }
+          }
+          if (!authedUser) {
+            const qUsers = query(collection(firestoreDb, 'users'), where('email', '==', cleanIdentifier));
+            const snap = await getDocs(qUsers).catch(() => null);
+            if (snap && !snap.empty) {
+              authedUser = snap.docs[0].data() as User;
+            } else if (fbUid) {
+              isFallbackUser = true;
+              authedUser = {
+                id: fbUid,
+                name: cleanIdentifier.split('@')[0],
+                email: cleanIdentifier,
+                phone: '',
+                role: (cleanIdentifier === 'naeemummadau@gmail.com' || cleanIdentifier === 'ahmadnaim2877@gmail.com') ? 'admin' : 'customer',
+                status: 'active',
+                isVerified: true,
+                referralCode: 'NPAY' + Math.floor(100 + Math.random() * 900),
+                walletBalance: 0,
+                totalSavings: 0,
+                referralEarnings: 0,
+                totalTransactionsCount: 0,
+                createdAt: new Date().toISOString(),
+              };
+            }
           }
         } catch (fsErr) {
           console.warn('Firestore verified lookup note:', fsErr);
@@ -255,7 +265,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         throw new Error('Invalid credentials or account not found. Please check your details.');
       }
 
-      await syncUserToFirestore(authedUser).catch(err => console.warn('Firestore sync note:', err));
+      // Only create user in Firestore if no document exists yet (never overwrite existing balances/virtual accounts)
+      const existingFsUser = await getUser(authedUser.id).catch(() => null);
+      if (existingFsUser) {
+        if (isFallbackUser) {
+          authedUser = existingFsUser;
+        }
+      } else {
+        await setUser(authedUser).catch(err => console.warn('Firestore sync note:', err));
+      }
 
       onAuthSuccess(authedUser);
       onClose();
@@ -314,6 +332,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           userObj = data.user;
         }
       } catch {}
+
+      if (!userObj && fbUser.uid) {
+        userObj = await getUser(fbUser.uid).catch(() => null);
+      }
 
       if (!userObj) {
         try {

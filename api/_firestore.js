@@ -243,6 +243,11 @@ function encodeDocPath(docPath) {
     .join('/');
 }
 
+/**
+ * @param {string} docPath
+ * @param {string | null | undefined} [userToken]
+ * @returns {Promise<{ ok: boolean, status: number, data: Record<string, any> | null, error: string | null }>}
+ */
 export async function fsGetDoc(docPath, userToken = null) {
   const { headers, useApiKey } = await resolveFirestoreHeaders(userToken);
   const qs = useApiKey ? `?key=${encodeURIComponent(FIREBASE_API_KEY)}` : '';
@@ -260,6 +265,13 @@ export async function fsGetDoc(docPath, userToken = null) {
   }
 }
 
+/**
+ * @param {string} collectionName
+ * @param {string | null | undefined} documentId
+ * @param {Record<string, any>} data
+ * @param {string | null | undefined} [userToken]
+ * @returns {Promise<{ ok: boolean, status: number, data?: Record<string, any> | null, error: string | null }>}
+ */
 export async function fsCreateDoc(collectionName, documentId, data, userToken = null) {
   const { headers, useApiKey } = await resolveFirestoreHeaders(userToken);
   const params = new URLSearchParams();
@@ -283,6 +295,13 @@ export async function fsCreateDoc(collectionName, documentId, data, userToken = 
   }
 }
 
+/**
+ * @param {string} docPath
+ * @param {Record<string, any>} data
+ * @param {string[] | null | undefined} [fieldMask]
+ * @param {string | null | undefined} [userToken]
+ * @returns {Promise<{ ok: boolean, status: number, data?: Record<string, any> | null, error: string | null }>}
+ */
 export async function fsPatchDoc(docPath, data, fieldMask = null, userToken = null) {
   const { headers, useApiKey } = await resolveFirestoreHeaders(userToken);
   const params = new URLSearchParams();
@@ -307,6 +326,31 @@ export async function fsPatchDoc(docPath, data, fieldMask = null, userToken = nu
   }
 }
 
+/**
+ * @param {string} collectionName
+ * @param {string | null | undefined} documentId
+ * @param {Record<string, any>} data
+ * @param {string | null | undefined} [userToken]
+ * @returns {Promise<{ ok: boolean, status: number, data?: Record<string, any> | null, error: string | null }>}
+ */
+export async function fsUpsertDoc(collectionName, documentId, data, userToken = null) {
+  if (!documentId) {
+    return fsCreateDoc(collectionName, null, data, userToken);
+  }
+  const createRes = await fsCreateDoc(collectionName, documentId, data, userToken);
+  if (createRes.ok) return createRes;
+  if (createRes.status === 409 || String(createRes.error || '').toLowerCase().includes('already exists')) {
+    const keys = Object.keys(data || {});
+    return fsPatchDoc(`${collectionName}/${documentId}`, data, keys.length > 0 ? keys : null, userToken);
+  }
+  return createRes;
+}
+
+/**
+ * @param {string} docPath
+ * @param {string | null | undefined} [userToken]
+ * @returns {Promise<{ ok: boolean, status: number, error: string | null }>}
+ */
 export async function fsDeleteDoc(docPath, userToken = null) {
   const { headers, useApiKey } = await resolveFirestoreHeaders(userToken);
   const qs = useApiKey ? `?key=${encodeURIComponent(FIREBASE_API_KEY)}` : '';
@@ -323,6 +367,13 @@ export async function fsDeleteDoc(docPath, userToken = null) {
   }
 }
 
+/**
+ * @param {string} collectionId
+ * @param {Array<{ field: string, op?: string, value: any }>} [filters]
+ * @param {number} [limit]
+ * @param {string | null | undefined} [userToken]
+ * @returns {Promise<{ ok: boolean, status: number, documents: Array<Record<string, any>>, error: string | null }>}
+ */
 export async function fsRunQuery(collectionId, filters = [], limit = 200, userToken = null) {
   const { headers, useApiKey } = await resolveFirestoreHeaders(userToken);
   const qs = useApiKey ? `?key=${encodeURIComponent(FIREBASE_API_KEY)}` : '';
