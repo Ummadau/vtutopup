@@ -1,4 +1,4 @@
-import { findUserByIdentifier, SUPER_ADMIN_USER } from './_auth_helpers.js';
+import { findUserByIdentifier, sanitizeUser } from './_auth_helpers.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -18,5 +18,5 @@ export default async function handler(req, res) {
     return res.status(404).json({ error: 'User not found' });
   }
 
-  return res.status(200).json({ success: true, user });
+  return res.status(200).json({ success: true, user: sanitizeUser(user) });
 }

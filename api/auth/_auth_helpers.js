@@ -1,6 +1,80 @@
+import crypto from 'crypto';
+
 // Lightweight Firestore REST Authentication Helpers for Vercel
-const FIRESTORE_BASE = 'https://firestore.googleapis.com/v1/projects/gen-lang-client-0376919977/databases/ai-studio-naeemdatasub-8bb16184-21be-4bcb-bf84-6a9163fbd9db/documents';
-const FIRESTORE_KEY = 'AIzaSyBqaJeymaKiXVij6eypZQJFgK2dOH5CoTA';
+export const FIRESTORE_BASE =
+  'https://firestore.googleapis.com/v1/projects/gen-lang-client-0376919977/databases/ai-studio-naeemdatasub-8bb16184-21be-4bcb-bf84-6a9163fbd9db/documents';
+export const FIRESTORE_KEY =
+  process.env.FIREBASE_API_KEY || 'AIzaSyBqaJeymaKiXVij6eypZQJFgK2dOH5CoTA';
+
+export function hashPassword(password) {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(String(password), salt, 64).toString('hex');
+  return `${salt}:${derived}`;
+}
+
+export function verifyPassword(password, storedHash) {
+  if (!password || !storedHash || !String(storedHash).includes(':')) return false;
+  try {
+    const [salt, keyHex] = String(storedHash).split(':');
+    const keyBuf = Buffer.from(keyHex, 'hex');
+    const derived = crypto.scryptSync(String(password), salt, 64);
+    if (keyBuf.length !== derived.length) return false;
+    return crypto.timingSafeEqual(keyBuf, derived);
+  } catch {
+    return false;
+  }
+}
+
+export function sanitizeUser(user) {
+  if (!user || typeof user !== 'object') return user;
+  const { passwordHash, password, ...safe } = user;
+  return safe;
+}
+
+export async function verifyFirebaseIdToken(idToken) {
+  if (!idToken || typeof idToken !== 'string') return null;
+  try {
+    const res = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${FIRESTORE_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idToken }),
+      }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const fbUser = data?.users?.[0];
+    if (!fbUser?.email) return null;
+    return {
+      uid: fbUser.localId,
+      email: String(fbUser.email).toLowerCase(),
+      displayName: fbUser.displayName || '',
+      emailVerified: !!fbUser.emailVerified,
+    };
+  } catch {
+    return null;
+  }
+}
+
+export async function verifyFirebasePassword(email, password) {
+  if (!email || !password) return null;
+  try {
+    const res = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:signInWithPassword?key=${FIRESTORE_KEY}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email, password, returnSecureToken: false }),
+      }
+    );
+    if (!res.ok) return { ok: false, error: (await res.json().catch(() => ({})))?.error?.message };
+    const data = await res.json();
+    return { ok: true, localId: data.localId, email: data.email };
+  } catch {
+    return null;
+  }
+}
 
 export function normalizePhone(phone = '') {
   const p = String(phone).replace(/\D/g, '');
@@ -81,10 +155,8 @@ export async function findUserByIdentifier(identifier = '') {
   const cleanPhone = normalizePhone(clean);
 
   // Check admin identity
-  if (clean === 'naeemummadau@gmail.com' || cleanPhone === '08000000001' || clean === 'ahmadnaim2877@gmail.com') {
-    if (clean === 'naeemummadau@gmail.com' || cleanPhone === '08000000001') {
-      return { ...SUPER_ADMIN_USER };
-    }
+  if (clean === 'naeemummadau@gmail.com' || cleanPhone === '08000000001') {
+    return { ...SUPER_ADMIN_USER };
   }
 
   // 1. Try finding by email
@@ -100,12 +172,12 @@ export async function findUserByIdentifier(identifier = '') {
               fieldFilter: {
                 field: { fieldPath: 'email' },
                 op: 'EQUAL',
-                value: { stringValue: clean }
-              }
+                value: { stringValue: clean },
+              },
             },
-            limit: 1
-          }
-        })
+            limit: 1,
+          },
+        }),
       });
       if (qRes.ok) {
         const results = await qRes.json();
@@ -131,12 +203,12 @@ export async function findUserByIdentifier(identifier = '') {
               fieldFilter: {
                 field: { fieldPath: 'phone' },
                 op: 'EQUAL',
-                value: { stringValue: cleanPhone }
-              }
+                value: { stringValue: cleanPhone },
+              },
             },
-            limit: 1
-          }
-        })
+            limit: 1,
+          },
+        }),
       });
       if (qRes.ok) {
         const results = await qRes.json();
@@ -163,10 +235,10 @@ export async function findUserByIdentifier(identifier = '') {
 
 export async function createFirestoreUser(user) {
   const payload = wrapFirestoreDoc(user);
-  const res = await fetch(`${FIRESTORE_BASE}/users?documentId=${user.id}&key=${FIRESTORE_KEY}`, {
+  const res = await fetch(`${FIRESTORE_BASE}/users?documentId=${encodeURIComponent(user.id)}&key=${FIRESTORE_KEY}`, {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
   return res.ok;
 }
@@ -174,10 +246,10 @@ export async function createFirestoreUser(user) {
 export async function updateFirestoreUser(userId, fields) {
   const updateMaskParams = Object.keys(fields).map(f => `updateMask.fieldPaths=${encodeURIComponent(f)}`).join('&');
   const payload = wrapFirestoreDoc(fields);
-  const res = await fetch(`${FIRESTORE_BASE}/users/${userId}?${updateMaskParams}&key=${FIRESTORE_KEY}`, {
+  const res = await fetch(`${FIRESTORE_BASE}/users/${encodeURIComponent(userId)}?${updateMaskParams}&key=${FIRESTORE_KEY}`, {
     method: 'PATCH',
     headers: { 'Content-Type': 'application/json' },
-    body: JSON.stringify(payload)
+    body: JSON.stringify(payload),
   });
   return res.ok;
 }

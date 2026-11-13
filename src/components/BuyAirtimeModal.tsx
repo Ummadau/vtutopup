@@ -272,7 +272,7 @@ export const BuyAirtimeModal: React.FC<BuyAirtimeModalProps> = ({
             <ArrowLeft className="w-4 h-4" />
           </button>
           <div className="text-center">
-            <span className="text-sm font-black tracking-wider uppercase">NAEEM DATA SUB</span>
+            <span className="text-sm font-black tracking-wider uppercase">NPAY</span>
           </div>
           <div className="w-8" />
         </div>

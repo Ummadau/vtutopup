@@ -56,7 +56,7 @@ export const FundWalletModal: React.FC<FundWalletModalProps> = ({
   const [manualConfig, setManualConfig] = useState<ManualFundingConfig>({
     bankName: 'Moniepoint MFB',
     accountNumber: '8123456789',
-    accountName: 'NAEEM DATA SUB OFFICIAL',
+    accountName: 'NPAY OFFICIAL',
     supportWhatsapp: '+2348012345678',
     instructions: 'Transfer to the bank account above, then submit your payment reference for instant admin verification.',
   });
@@ -238,34 +238,32 @@ export const FundWalletModal: React.FC<FundWalletModalProps> = ({
 
       // Resilient Fallback: If backend is unreachable or returned non-JSON, generate virtual account directly
       if (!newAcc) {
-        let bankName = 'Wema Bank / UnityBills';
+        let bankName = 'Wema Bank';
         let accountNumber = `98${Math.floor(10000000 + Math.random() * 90000000)}`;
-        let accountName = 'UNITYBILLSNG/CUSTOMER';
+        let accountName = 'NPAY/CUSTOMER';
 
         if (bank === 'PALMPAY') {
           bankName = 'PalmPay';
           accountNumber = `80${Math.floor(10000000 + Math.random() * 90000000)}`;
-          accountName = 'NAEEM - Customer';
+          accountName = 'NPAY - Customer';
         } else if (bank === 'SAFEHAVEN') {
           bankName = 'SafeHaven Bank';
           accountNumber = `60${Math.floor(10000000 + Math.random() * 90000000)}`;
-          accountName = 'NAEEM - Customer';
+          accountName = 'NPAY - Customer';
         } else if (bank === '9PSB') {
           bankName = '9PSB Bank';
           accountNumber = `52${Math.floor(10000000 + Math.random() * 90000000)}`;
-          accountName = 'NAEEM - Customer';
+          accountName = 'NPAY - Customer';
         } else if (bank === 'PROVIDUS') {
           bankName = 'Providus Bank';
           accountNumber = `10${Math.floor(10000000 + Math.random() * 90000000)}`;
-          accountName = 'NAEEM - Customer';
+          accountName = 'NPAY - Customer';
         }
 
         if (userId) {
           const firestoreUser = await getUser(userId).catch(() => null);
           if (firestoreUser?.name) {
-            accountName = (bank === 'UNITYBILLS' || bank === 'WEMA')
-              ? `UNITYBILLSNG/${firestoreUser.name.toUpperCase()}`
-              : `NAEEM - ${firestoreUser.name}`;
+            accountName = `NPAY/${firestoreUser.name.toUpperCase()}`;
           }
         }
 
@@ -274,7 +272,7 @@ export const FundWalletModal: React.FC<FundWalletModalProps> = ({
           accountNumber,
           accountName,
           depositFee: 0,
-          provider: 'billstack',
+          provider: 'automated',
           createdAt: new Date().toISOString(),
         };
 
@@ -371,7 +369,7 @@ export const FundWalletModal: React.FC<FundWalletModalProps> = ({
         <div className="bg-gradient-to-r from-purple-800 via-purple-700 to-indigo-800 p-5 text-white flex items-center justify-between">
           <div>
             <h3 className="text-lg font-bold">Fund Your Wallet</h3>
-            <p className="text-xs text-purple-200">Instant automated credit via BillStack virtual accounts</p>
+            <p className="text-xs text-purple-200">Instant automated credit via dedicated bank accounts</p>
           </div>
           <button
             onClick={onClose}
@@ -450,7 +448,7 @@ export const FundWalletModal: React.FC<FundWalletModalProps> = ({
                     </span>
                   </div>
 
-                  {/* Render Existing Virtual Account Cards (SIMULATE DEPOSIT BUTTON REMOVED AS REQUESTED) */}
+                  {/* Render Existing Virtual Account Cards */}
                   <div className="space-y-3">
                     {accounts.map((acc, idx) => (
                       <div
@@ -464,7 +462,7 @@ export const FundWalletModal: React.FC<FundWalletModalProps> = ({
                               {acc.bankName}
                             </span>
                             <span className="px-1.5 py-0.5 rounded text-[9px] font-black uppercase tracking-wider bg-purple-100 text-purple-800 dark:bg-purple-900/60 dark:text-purple-300">
-                              BillStack Dedicated
+                              Dedicated NUBAN
                             </span>
                           </div>
                           <button
@@ -508,7 +506,7 @@ export const FundWalletModal: React.FC<FundWalletModalProps> = ({
                       className="w-full py-2.5 px-3 rounded-2xl border border-dashed border-purple-300 dark:border-purple-700 hover:bg-purple-50 dark:hover:bg-purple-950/30 text-purple-700 dark:text-purple-300 text-xs font-bold transition flex items-center justify-center gap-1.5 cursor-pointer"
                     >
                       <Plus className="w-4 h-4" />
-                      <span>Generate Account for Another Bank (e.g. UnityBills, Wema, Moniepoint, PalmPay)</span>
+                      <span>Generate Account for Another Bank (e.g. Wema, Moniepoint, PalmPay)</span>
                     </button>
                   ) : (
                     <div className="p-4 rounded-2xl border border-purple-200 dark:border-purple-800 bg-purple-50/50 dark:bg-purple-950/30 space-y-3">
@@ -527,7 +525,7 @@ export const FundWalletModal: React.FC<FundWalletModalProps> = ({
 
                       <div className="grid grid-cols-2 sm:grid-cols-3 gap-2">
                         {[
-                          { id: 'UNITYBILLS', label: 'UnityBills Direct', desc: 'Instant Routing' },
+                          { id: 'UNITYBILLS', label: 'Wema Bank NUBAN', desc: 'Instant Account' },
                           { id: 'WEMA', label: 'Wema Bank', desc: 'NUBAN Account' },
                           { id: 'MONIEPOINT', label: 'Moniepoint MFB', desc: 'Instant Deposit' },
                           { id: '9PSB', label: '9PSB Bank', desc: 'Instant NUBAN' },
@@ -550,7 +548,7 @@ export const FundWalletModal: React.FC<FundWalletModalProps> = ({
 
                       {isGeneratingAccount && (
                         <p className="text-xs font-bold text-purple-600 text-center animate-pulse pt-1">
-                          Creating dedicated account with provider gateway...
+                          Reserving dedicated bank account...
                         </p>
                       )}
                     </div>
@@ -567,7 +565,7 @@ export const FundWalletModal: React.FC<FundWalletModalProps> = ({
                       Generate Dedicated Virtual Account
                     </h4>
                     <p className="text-xs text-slate-500 dark:text-slate-400 max-w-sm mx-auto">
-                      Create an automated account powered by BillStack. Money transferred to this account will credit your wallet instantly!
+                      Create an automated dedicated account. Money transferred to this account will credit your wallet instantly!
                     </p>
                   </div>
 
@@ -578,7 +576,7 @@ export const FundWalletModal: React.FC<FundWalletModalProps> = ({
                     </label>
                     <div className="grid grid-cols-2 gap-2">
                       {[
-                        { id: 'UNITYBILLS', name: 'UnityBills Direct', desc: 'Instant account via UnityBills.ng' },
+                        { id: 'UNITYBILLS', name: 'Wema Direct', desc: 'Instant NUBAN Account' },
                         { id: 'WEMA', name: 'Wema Bank', desc: 'Dedicated NUBAN' },
                         { id: 'MONIEPOINT', name: 'Moniepoint MFB', desc: 'Instant deposit routing' },
                         { id: '9PSB', name: '9PSB Bank', desc: 'Instant account generation' },
@@ -611,12 +609,12 @@ export const FundWalletModal: React.FC<FundWalletModalProps> = ({
                     </div>
                   </div>
 
-                  {/* Inline Identity Field Section for UnityBills / PalmPay */}
+                  {/* Inline Identity Field Section */}
                   {(selectedBank === 'PALMPAY' || selectedBank === 'UNITYBILLS') && (
                     <div className="p-3.5 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-800 rounded-2xl space-y-3 animate-fade-in">
                       <div className="flex items-center gap-1.5 text-xs font-bold text-amber-800 dark:text-amber-300">
                         <Lock className="w-4 h-4 text-amber-600" />
-                        <span>{selectedBank} Identity Verification (Select NIN or BVN)</span>
+                        <span>{selectedBank === 'UNITYBILLS' ? 'Wema Direct' : selectedBank} Identity Verification (Select NIN or BVN)</span>
                       </div>
 
                       <div className="grid grid-cols-2 gap-2">
@@ -656,12 +654,12 @@ export const FundWalletModal: React.FC<FundWalletModalProps> = ({
                     {isGeneratingAccount ? (
                       <>
                         <RefreshCw className="w-4 h-4 animate-spin text-white" />
-                        <span>Generating Dedicated Account via BillStack API...</span>
+                        <span>Generating Dedicated Virtual Account...</span>
                       </>
                     ) : (
                       <>
                         <Sparkles className="w-4 h-4 text-purple-200" />
-                        <span>Generate {selectedBank} Virtual Account Now</span>
+                        <span>Generate {selectedBank === 'UNITYBILLS' ? 'Wema Direct' : selectedBank} Virtual Account Now</span>
                       </>
                     )}
                   </button>
@@ -685,7 +683,7 @@ export const FundWalletModal: React.FC<FundWalletModalProps> = ({
 
                   {/* Contact Admin WhatsApp Button */}
                   <a
-                    href={`https://wa.me/${(manualConfig.supportWhatsapp || '+2348012345678').replace(/\D/g, '')}?text=${encodeURIComponent(`Hello Admin, I want to submit a manual bank transfer funding request for NAEEM DATA SUB.`)}`}
+                    href={`https://wa.me/${(manualConfig.supportWhatsapp || '+2348012345678').replace(/\D/g, '')}?text=${encodeURIComponent(`Hello Admin, I want to submit a manual bank transfer funding request for NPay.`)}`}
                     target="_blank"
                     rel="noreferrer"
                     className="px-3 py-1.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-bold text-[11px] flex items-center gap-1.5 shadow-sm transition"

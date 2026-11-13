@@ -1,4 +1,4 @@
-// Firebase Cloud Messaging Web Push Service Worker for NAEEM DATA SUB
+// Firebase Cloud Messaging Web Push Service Worker for NPay
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-app-compat.js');
 importScripts('https://www.gstatic.com/firebasejs/10.8.0/firebase-messaging-compat.js');
 
@@ -14,7 +14,7 @@ const messaging = firebase.messaging();
 // Background Push Notification Handler
 messaging.onBackgroundMessage((payload) => {
   console.log('[FCM Service Worker Background Message]:', payload);
-  const title = payload.notification?.title || payload.data?.title || 'NAEEM DATA SUB Push Notification';
+  const title = payload.notification?.title || payload.data?.title || 'NPay Push Notification';
   const body = payload.notification?.body || payload.data?.body || 'You have received a new transaction or wallet alert.';
   
   const options = {

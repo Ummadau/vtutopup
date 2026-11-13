@@ -77,11 +77,11 @@ export const Logo: React.FC<LogoProps> = ({
       </div>
 
       <div className="flex flex-col leading-none">
-        <div className={`flex items-center gap-1 ${titleSizes[size]} ${white ? 'text-white' : 'text-slate-900 dark:text-white'}`}>
+        <div className={`flex items-center gap-0.5 ${titleSizes[size]} ${white ? 'text-white' : 'text-slate-900 dark:text-white'}`}>
           <span className="bg-gradient-to-r from-purple-700 via-indigo-600 to-purple-800 bg-clip-text text-transparent dark:from-purple-400 dark:to-indigo-300">
-            NAEEM
+            N
           </span>
-          <span className={white ? 'text-purple-200' : 'text-purple-900 dark:text-purple-300'}>DATA SUB</span>
+          <span className={white ? 'text-purple-200' : 'text-purple-900 dark:text-purple-300'}>Pay</span>
         </div>
         {showTagline && (
           <span className={`${taglineSizes[size]} font-medium tracking-wide mt-0.5 ${white ? 'text-purple-200/80' : 'text-purple-600 dark:text-purple-400'}`}>

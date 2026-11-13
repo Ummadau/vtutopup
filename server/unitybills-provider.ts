@@ -1,5 +1,5 @@
 import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { firestoreDb } from '../src/lib/firebase.ts';
+import { firestoreDb, auth } from '../src/lib/firebase.ts';
 import { UnityBillsConfig, VirtualAccount, User } from '../src/types/index.ts';
 import { db } from './db.ts';
 import { saveUserVirtualAccount } from './billstack-provider.ts';
@@ -36,6 +36,7 @@ let memoryUnityBillsConfig: UnityBillsConfig = { ...defaultUnityBillsConfig };
  * Load UnityBills configuration from Firestore with memory fallback
  */
 export async function getFirestoreUnityBillsConfig(): Promise<UnityBillsConfig> {
+  if (!auth.currentUser) return memoryUnityBillsConfig;
   try {
     const docRef = doc(firestoreDb, 'systemSettings', 'unitybills_config');
     const snap = await getDoc(docRef);
@@ -53,9 +54,6 @@ export async function getFirestoreUnityBillsConfig(): Promise<UnityBillsConfig> 
   return memoryUnityBillsConfig;
 }
 
-/**
- * Persist UnityBills configuration into Firestore and memory
- */
 export async function saveFirestoreUnityBillsConfig(config: Partial<UnityBillsConfig>): Promise<UnityBillsConfig> {
   memoryUnityBillsConfig = {
     ...memoryUnityBillsConfig,
@@ -63,18 +61,20 @@ export async function saveFirestoreUnityBillsConfig(config: Partial<UnityBillsCo
     lastTested: new Date().toISOString(),
   };
 
-  try {
-    const docRef = doc(firestoreDb, 'systemSettings', 'unitybills_config');
-    await setDoc(
-      docRef,
-      {
-        ...memoryUnityBillsConfig,
-        updatedAt: new Date().toISOString(),
-      },
-      { merge: true }
-    );
-  } catch (err: any) {
-    console.warn('Firestore UnityBills config save note:', err?.message || err);
+  if (auth.currentUser) {
+    try {
+      const docRef = doc(firestoreDb, 'systemSettings', 'unitybills_config');
+      await setDoc(
+        docRef,
+        {
+          ...memoryUnityBillsConfig,
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+    } catch (err: any) {
+      console.warn('Firestore UnityBills config save note:', err?.message || err);
+    }
   }
 
   return memoryUnityBillsConfig;

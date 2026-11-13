@@ -54,7 +54,8 @@ import { safeFetchJson } from './lib/safeFetch.ts';
 import { translations, Language } from './lib/i18n.ts';
 import { User, Transaction, NotificationItem, VirtualAccount, UserRole } from './types/index.ts';
 import { collection, getDocs, query, where, doc, getDoc } from 'firebase/firestore';
-import { firestoreDb } from './lib/firebase.ts';
+import { signOut, onAuthStateChanged } from 'firebase/auth';
+import { firestoreDb, auth } from './lib/firebase.ts';
 import {
   syncTransactionToFirestore,
   syncUserToFirestore,
@@ -92,14 +93,10 @@ export default function App() {
   const getInitialUserAndSession = (): { user: User; view: 'landing' | 'app' } => {
     try {
       const stored = typeof window !== 'undefined' ? localStorage.getItem('naeem_user_session') : null;
-      const remembered = typeof window !== 'undefined' ? localStorage.getItem('naeem_remembered_user') : null;
       
       let sessionData = null;
       if (stored) {
         try { sessionData = JSON.parse(stored); } catch {}
-      }
-      if (!sessionData && remembered) {
-        try { sessionData = JSON.parse(remembered); } catch {}
       }
 
       if (sessionData && sessionData.id) {
@@ -132,6 +129,18 @@ export default function App() {
   const initialSession = getInitialUserAndSession();
   const [currentView, setCurrentView] = useState<'landing' | 'app'>(initialSession.view);
   const [user, setUser] = useState<User>(initialSession.user);
+  const [authReady, setAuthReady] = useState(false);
+  const [fbUid, setFbUid] = useState<string | null>(null);
+  const [fbEmail, setFbEmail] = useState<string | null>(null);
+
+  useEffect(() => {
+    const unsubAuth = onAuthStateChanged(auth, (fbUser) => {
+      setFbUid(fbUser?.uid || null);
+      setFbEmail(fbUser?.email?.toLowerCase() || null);
+      setAuthReady(true);
+    });
+    return () => unsubAuth();
+  }, []);
 
   const [virtualAccounts, setVirtualAccounts] = useState<VirtualAccount[]>([]);
   const [activeBankIdx, setActiveBankIdx] = useState(0);
@@ -185,40 +194,44 @@ export default function App() {
         setTransactions(tRes.transactions);
       }
 
-      // Live Firestore synchronization for seamless Vercel & AI Studio data sharing
-      try {
-        // Fetch user's latest balance and virtual accounts directly from Firestore
-        const userDocRef = doc(firestoreDb, 'users', user.id);
-        const userSnap = await getDoc(userDocRef).catch(() => null);
-        if (userSnap && userSnap.exists()) {
-          const liveUser = userSnap.data() as User;
-          setUser(prev => ({
-            ...prev,
-            walletBalance: liveUser.walletBalance !== undefined ? liveUser.walletBalance : prev.walletBalance,
-            totalSavings: liveUser.totalSavings !== undefined ? liveUser.totalSavings : prev.totalSavings,
-            referralEarnings: liveUser.referralEarnings !== undefined ? liveUser.referralEarnings : prev.referralEarnings,
-            totalTransactionsCount: liveUser.totalTransactionsCount !== undefined ? liveUser.totalTransactionsCount : prev.totalTransactionsCount,
-            role: liveUser.role || prev.role,
-            virtualAccounts: liveUser.virtualAccounts || prev.virtualAccounts,
-          }));
-          if (liveUser.virtualAccounts && liveUser.virtualAccounts.length > 0) {
-            setVirtualAccounts(liveUser.virtualAccounts);
+      // Live Firestore synchronization when Firebase Auth session is active
+      const activeFbUser = auth.currentUser;
+      const isFbAdmin =
+        activeFbUser?.email?.toLowerCase() === 'naeemummadau@gmail.com' ||
+        activeFbUser?.email?.toLowerCase() === 'ahmadnaim2877@gmail.com';
+      if (activeFbUser && (isFbAdmin || activeFbUser.uid === user.id)) {
+        try {
+          const userDocRef = doc(firestoreDb, 'users', user.id);
+          const userSnap = await getDoc(userDocRef).catch(() => null);
+          if (userSnap && userSnap.exists()) {
+            const liveUser = userSnap.data() as User;
+            setUser(prev => ({
+              ...prev,
+              walletBalance: liveUser.walletBalance !== undefined ? liveUser.walletBalance : prev.walletBalance,
+              totalSavings: liveUser.totalSavings !== undefined ? liveUser.totalSavings : prev.totalSavings,
+              referralEarnings: liveUser.referralEarnings !== undefined ? liveUser.referralEarnings : prev.referralEarnings,
+              totalTransactionsCount: liveUser.totalTransactionsCount !== undefined ? liveUser.totalTransactionsCount : prev.totalTransactionsCount,
+              role: liveUser.role || prev.role,
+              virtualAccounts: liveUser.virtualAccounts || prev.virtualAccounts,
+            }));
+            if (liveUser.virtualAccounts && liveUser.virtualAccounts.length > 0) {
+              setVirtualAccounts(liveUser.virtualAccounts);
+            }
           }
-        }
 
-        // Fetch transactions from Firestore if empty or on reload
-        const txQuery = user.role === 'admin'
-          ? collection(firestoreDb, 'transactions')
-          : query(collection(firestoreDb, 'transactions'), where('userId', '==', user.id));
+          const txQuery = isFbAdmin
+            ? collection(firestoreDb, 'transactions')
+            : query(collection(firestoreDb, 'transactions'), where('userId', '==', user.id));
 
-        const snap = await getDocs(txQuery).catch(() => null);
-        if (snap && !snap.empty) {
-          const liveList = snap.docs.map(d => d.data() as Transaction);
-          liveList.sort((a, b) => new Date(b.date || (b as any).createdAt || 0).getTime() - new Date(a.date || (a as any).createdAt || 0).getTime());
-          setTransactions(liveList);
+          const snap = await getDocs(txQuery).catch(() => null);
+          if (snap && !snap.empty) {
+            const liveList = snap.docs.map(d => d.data() as Transaction);
+            liveList.sort((a, b) => new Date(b.date || (b as any).createdAt || 0).getTime() - new Date(a.date || (a as any).createdAt || 0).getTime());
+            setTransactions(liveList);
+          }
+        } catch (fsErr) {
+          console.warn('Live Firestore data synchronization note:', fsErr);
         }
-      } catch (fsErr) {
-        console.warn('Live Firestore data synchronization note:', fsErr);
       }
 
       if (nRes.notifications) {
@@ -232,61 +245,68 @@ export default function App() {
 
   useEffect(() => {
     loadUserData();
-  }, [user.id]);
+  }, [user.id, authReady, fbUid]);
 
-  // Real-time Firestore onSnapshot listeners: automatically syncs wallet balance and transactions
+  // Real-time Firestore onSnapshot listeners: only attach once Firebase Auth is ready and matches user
   useEffect(() => {
-    if (!user.id) return;
+    if (!user.id || !authReady || !fbUid) return;
 
-    // Seed Firestore asynchronously if not yet populated
-    initializeFirestoreSeeds(user, transactions).catch(() => {});
+    const isFbAdmin =
+      fbEmail === 'naeemummadau@gmail.com' || fbEmail === 'ahmadnaim2877@gmail.com';
+    const canSyncDirect = isFbAdmin || fbUid === user.id;
 
-    // Subscribe to real-time user updates (wallet balance, savings, stats)
-    const unsubscribeUser = subscribeToUser(
-      user.id,
-      (updatedUser) => {
-        if (updatedUser) {
-          setUser((prev) => ({
-            ...prev,
-            walletBalance: updatedUser.walletBalance !== undefined ? updatedUser.walletBalance : prev.walletBalance,
-            totalSavings: updatedUser.totalSavings !== undefined ? updatedUser.totalSavings : prev.totalSavings,
-            referralEarnings: updatedUser.referralEarnings !== undefined ? updatedUser.referralEarnings : prev.referralEarnings,
-            totalTransactionsCount: updatedUser.totalTransactionsCount !== undefined ? updatedUser.totalTransactionsCount : prev.totalTransactionsCount,
-            role: updatedUser.role || prev.role,
-            name: updatedUser.name || prev.name,
-            phone: updatedUser.phone || prev.phone,
-            transactionPin: updatedUser.transactionPin || prev.transactionPin || '1234',
-          }));
-        }
-      },
-      (err) => {
-        console.warn('Real-time user snapshot notice:', err.message);
-      }
-    );
+    if (canSyncDirect) {
+      initializeFirestoreSeeds(user, transactions).catch(() => {});
+    }
 
-    // Subscribe to real-time transactions
-    const unsubscribeTxs = user.role === 'admin'
-      ? subscribeToAllTransactions(
-          (liveTxs) => {
-            if (liveTxs && liveTxs.length > 0) {
-              setTransactions(liveTxs);
+    const unsubscribeUser = canSyncDirect
+      ? subscribeToUser(
+          user.id,
+          (updatedUser) => {
+            if (updatedUser) {
+              setUser((prev) => ({
+                ...prev,
+                walletBalance: updatedUser.walletBalance !== undefined ? updatedUser.walletBalance : prev.walletBalance,
+                totalSavings: updatedUser.totalSavings !== undefined ? updatedUser.totalSavings : prev.totalSavings,
+                referralEarnings: updatedUser.referralEarnings !== undefined ? updatedUser.referralEarnings : prev.referralEarnings,
+                totalTransactionsCount: updatedUser.totalTransactionsCount !== undefined ? updatedUser.totalTransactionsCount : prev.totalTransactionsCount,
+                role: updatedUser.role || prev.role,
+                name: updatedUser.name || prev.name,
+                phone: updatedUser.phone || prev.phone,
+                transactionPin: updatedUser.transactionPin || prev.transactionPin || '1234',
+              }));
             }
           },
           (err) => {
-            console.warn('Real-time admin transactions notice:', err.message);
+            console.warn('Real-time user snapshot notice:', err.message);
           }
         )
-      : subscribeToTransactions(
-          user.id,
-          (liveTxs) => {
-            if (liveTxs && liveTxs.length > 0) {
-              setTransactions(liveTxs);
-            }
-          },
-          (err) => {
-            console.warn('Real-time transactions notice:', err.message);
-          }
-        );
+      : () => {};
+
+    const unsubscribeTxs = canSyncDirect
+      ? (isFbAdmin && user.role === 'admin'
+          ? subscribeToAllTransactions(
+              (liveTxs) => {
+                if (liveTxs && liveTxs.length > 0) {
+                  setTransactions(liveTxs);
+                }
+              },
+              (err) => {
+                console.warn('Real-time admin transactions notice:', err.message);
+              }
+            )
+          : subscribeToTransactions(
+              user.id,
+              (liveTxs) => {
+                if (liveTxs && liveTxs.length > 0) {
+                  setTransactions(liveTxs);
+                }
+              },
+              (err) => {
+                console.warn('Real-time transactions notice:', err.message);
+              }
+            ))
+      : () => {};
 
     // Attach FCM Foreground Push Message Listener
     listenToForegroundPushMessages((payload) => {
@@ -298,7 +318,7 @@ export default function App() {
       unsubscribeUser();
       unsubscribeTxs();
     };
-  }, [user.id, user.role]);
+  }, [user.id, user.role, authReady, fbUid, fbEmail]);
 
   // Handle Quick Demo Account Switch
   const handleQuickSwitch = async (role: UserRole) => {
@@ -340,18 +360,18 @@ export default function App() {
     const isRateLimited = status === 429 || rawMsg.toLowerCase().includes('too many requests') || rawMsg.toLowerCase().includes('rate limit');
 
     if (is404 || isInvalidResponse) {
-      title = `${context?.serviceName || 'Service'} Provider Unavailable (HTTP 404)`;
-      message = 'The active VTU gateway returned 404 Not Found or an invalid response. Please switch to an alternative provider (e.g. VTUNaija or NCWallet) in the Admin Dashboard, or contact Support on WhatsApp for assistance.';
+      title = `${context?.serviceName || 'Service'} System Temporarily Unavailable`;
+      message = 'The service system is currently undergoing maintenance or updates. Please try again shortly or contact Customer Support on WhatsApp.';
     } else if (isGatewayDown) {
-      title = 'Provider Gateway Timeout';
-      message = 'The upstream telecom provider is currently experiencing delays. Please try switching provider in Admin Dashboard or retry shortly.';
+      title = 'Network Service Delay';
+      message = 'The service provider is currently experiencing temporary network delays. Please wait a moment and retry.';
     } else if (isRateLimited) {
       title = 'Security Throttled';
       message = 'Request limit reached for account security. Please wait 60 seconds before retrying.';
     } else if (isInsufficient) {
-      if (rawMsg.toLowerCase().includes('upstream') || rawMsg.toLowerCase().includes('gateway') || rawMsg.toLowerCase().includes('vtunaija') || rawMsg.toLowerCase().includes('ncwallet') || rawMsg.toLowerCase().includes('api')) {
-        title = 'Provider Gateway Balance Low';
-        message = rawMsg;
+      if (rawMsg.toLowerCase().includes('upstream') || rawMsg.toLowerCase().includes('gateway') || rawMsg.toLowerCase().includes('provider')) {
+        title = 'Service System Notice';
+        message = 'Service is temporarily undergoing system maintenance. Please try again shortly.';
       } else {
         title = 'Insufficient Wallet Balance';
         message = rawMsg || 'Your wallet balance is insufficient for this transaction. Please fund your wallet.';
@@ -361,7 +381,7 @@ export default function App() {
       message = rawMsg || 'Incorrect 4-digit PIN. Please verify your PIN.';
     } else if (rawMsg) {
       title = 'Transaction Declined';
-      message = `${rawMsg}. If this persists, please try an alternative service provider or contact support.`;
+      message = `${rawMsg}. If this persists, please try again or contact support.`;
     }
 
     addToast(title, message, 'error');
@@ -1050,6 +1070,7 @@ export default function App() {
           onLogout={() => {
             localStorage.removeItem('naeem_user_session');
             localStorage.removeItem('naeem_remembered_user');
+            signOut(auth).catch(() => {});
             setUser({
               id: '',
               name: 'Guest User',
@@ -1094,14 +1115,6 @@ export default function App() {
           onAuthSuccess={(u) => {
             setUser(u);
             localStorage.setItem('naeem_user_session', JSON.stringify(u));
-            localStorage.setItem('naeem_remembered_user', JSON.stringify({
-              id: u.id,
-              name: u.name,
-              email: u.email,
-              phone: u.phone,
-              avatar: u.avatar,
-              transactionPin: u.transactionPin || '1234',
-            }));
             setCurrentView('app');
             loadUserData();
           }}

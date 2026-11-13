@@ -61,7 +61,12 @@ import {
 } from '../types/index.ts';
 import { TransactionStatusBadge } from './TransactionStatusBadge.tsx';
 import { collection, getDocs, doc, getDoc, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
-import { firestoreDb } from '../lib/firebase.ts';
+import { firestoreDb, auth } from '../lib/firebase.ts';
+
+const isFbAdminSignedIn = (): boolean => {
+  const email = (auth.currentUser?.email || '').toLowerCase();
+  return Boolean(auth.currentUser && (email === 'naeemummadau@gmail.com' || email === 'ahmadnaim2877@gmail.com'));
+};
 
 interface AdminDashboardProps {
   currentAdmin: User;
@@ -98,10 +103,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [providers, setProviders] = useState<ProviderConfig[]>([]);
   const [transactions, setTransactions] = useState<Transaction[]>([]);
   const [settings, setSettings] = useState<SystemSettings>({
-    platformName: 'NAEEM DATA SUB',
+    platformName: 'NPay',
     tagline: 'Fast, Affordable & Reliable Digital Services.',
     supportPhone: '+234 801 234 5678',
-    supportEmail: 'support@naeemdatasub.ng',
+    supportEmail: 'support@npay.ng',
     supportWhatsapp: '+2348012345678',
     minWalletFunding: 100,
     referralBonusPercent: 5,
@@ -416,17 +421,18 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       if (ncRes.config) setNcWalletConfig(ncRes.config);
       if (unityRes.config) setUnityBillsConfig(unityRes.config);
 
-      // Direct Live Firestore Synchronization (ensures Vercel & AI Studio have identical datasets)
+      // Direct Live Firestore Synchronization (public catalogs for all; private collections only when Firebase Admin Auth is active)
       try {
+        const fbAdmin = isFbAdminSignedIn();
         const [uSnap, pSnap, airSnap, dSnap, cSnap, exSnap, tSnap, setSnap] = await Promise.all([
-          (!uRes.users || uRes.users.length === 0) ? getDocs(collection(firestoreDb, 'users')).catch(() => null) : null,
+          (fbAdmin && (!uRes.users || uRes.users.length === 0)) ? getDocs(collection(firestoreDb, 'users')).catch(() => null) : null,
           (!pRes.plans || pRes.plans.length === 0) ? getDocs(collection(firestoreDb, 'dataPlans')).catch(() => null) : null,
           (!airRes.discounts || airRes.discounts.length === 0) ? getDocs(collection(firestoreDb, 'airtimeDiscounts')).catch(() => null) : null,
           (!discRes.discos || discRes.discos.length === 0) ? getDocs(collection(firestoreDb, 'electricityDiscos')).catch(() => null) : null,
           (!cabRes.packages || cabRes.packages.length === 0) ? getDocs(collection(firestoreDb, 'cablePackages')).catch(() => null) : null,
           (!exRes.pins || exRes.pins.length === 0) ? getDocs(collection(firestoreDb, 'examPins')).catch(() => null) : null,
-          (!tRes.transactions || tRes.transactions.length === 0) ? getDocs(collection(firestoreDb, 'transactions')).catch(() => null) : null,
-          (!setRes.settings) ? getDocs(collection(firestoreDb, 'systemSettings')).catch(() => null) : null,
+          (fbAdmin && (!tRes.transactions || tRes.transactions.length === 0)) ? getDocs(collection(firestoreDb, 'transactions')).catch(() => null) : null,
+          (fbAdmin && !setRes.settings) ? getDocs(collection(firestoreDb, 'systemSettings')).catch(() => null) : null,
         ]);
 
         if (uSnap && !uSnap.empty) setUsers(uSnap.docs.map(d => d.data() as User));
@@ -458,7 +464,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const [manualFundingConfig, setManualFundingConfig] = useState<ManualFundingConfig>({
     bankName: 'Moniepoint Microfinance Bank',
     accountNumber: '8123456789',
-    accountName: 'NAEEM DATA SUB OFFICIAL',
+    accountName: 'NPAY OFFICIAL',
     supportWhatsapp: '+2348012345678',
     instructions: 'Transfer to the admin bank account above, then submit your payment reference for instant admin verification.',
   });
@@ -476,20 +482,22 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       if (cRes.config) setManualFundingConfig(cRes.config);
       if (rRes.requests && rRes.requests.length > 0) setManualRequests(rRes.requests);
 
-      // Direct Firestore live fallback
-      try {
-        const [cfgSnap, reqSnap] = await Promise.all([
-          !cRes.config ? getDoc(doc(firestoreDb, 'settings', 'manual_funding')).catch(() => null) : null,
-          (!rRes.requests || rRes.requests.length === 0) ? getDocs(collection(firestoreDb, 'manual_funding_requests')).catch(() => null) : null,
-        ]);
-        if (cfgSnap && cfgSnap.exists()) setManualFundingConfig(cfgSnap.data() as ManualFundingConfig);
-        if (reqSnap && !reqSnap.empty) {
-          const list = reqSnap.docs.map(d => d.data() as ManualFundingRequest);
-          list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
-          setManualRequests(list);
+      // Direct Firestore live fallback (requires active Firebase Auth)
+      if (isFbAdminSignedIn()) {
+        try {
+          const [cfgSnap, reqSnap] = await Promise.all([
+            !cRes.config ? getDoc(doc(firestoreDb, 'settings', 'manual_funding')).catch(() => null) : null,
+            (!rRes.requests || rRes.requests.length === 0) ? getDocs(collection(firestoreDb, 'manual_funding_requests')).catch(() => null) : null,
+          ]);
+          if (cfgSnap && cfgSnap.exists()) setManualFundingConfig(cfgSnap.data() as ManualFundingConfig);
+          if (reqSnap && !reqSnap.empty) {
+            const list = reqSnap.docs.map(d => d.data() as ManualFundingRequest);
+            list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
+            setManualRequests(list);
+          }
+        } catch (fsErr) {
+          console.warn('Manual funding Firestore fallback note:', fsErr);
         }
-      } catch (fsErr) {
-        console.warn('Manual funding Firestore fallback note:', fsErr);
       }
     } catch (e) {
       console.warn('Manual funding fetch error:', e);
@@ -500,8 +508,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     e.preventDefault();
     setIsSavingManualConfig(true);
     try {
-      // 1. Direct Firestore write
-      await setDoc(doc(firestoreDb, 'settings', 'manual_funding'), manualFundingConfig, { merge: true }).catch(() => {});
+      // 1. Direct Firestore write when Firebase Admin Auth is active
+      if (isFbAdminSignedIn()) {
+        await setDoc(doc(firestoreDb, 'settings', 'manual_funding'), manualFundingConfig, { merge: true }).catch(() => {});
+      }
 
       // 2. Sync to API if available
       await fetch('/api/admin/manual-fund/config', {
@@ -524,9 +534,9 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleApproveManualRequest = async (requestId: string) => {
     setProcessingRequestId(requestId);
     try {
-      // 1. Direct Firestore update
+      // 1. Direct Firestore update when Firebase Admin Auth is active
       const req = manualRequests.find(r => r.id === requestId);
-      if (req) {
+      if (req && isFbAdminSignedIn()) {
         await updateDoc(doc(firestoreDb, 'manual_funding_requests', requestId), {
           status: 'approved',
           updatedAt: new Date().toISOString(),
@@ -1079,32 +1089,34 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       const currentBal = Number(adjustTargetUser.walletBalance || 0);
       const newBal = adjustType === 'credit' ? currentBal + amtNum : Math.max(0, currentBal - amtNum);
 
-      // 1. Direct live Firestore user balance update
-      await updateDoc(doc(firestoreDb, 'users', adjustTargetUser.id), {
-        walletBalance: newBal,
-        updatedAt: new Date().toISOString(),
-      }).catch(() => {});
+      if (isFbAdminSignedIn()) {
+        // 1. Direct live Firestore user balance update
+        await updateDoc(doc(firestoreDb, 'users', adjustTargetUser.id), {
+          walletBalance: newBal,
+          updatedAt: new Date().toISOString(),
+        }).catch(() => {});
 
-      // 2. Record transaction in Firestore
-      const txRef = `ADM-ADJ-${Date.now()}`;
-      const adjTx: Transaction = {
-        id: txRef,
-        reference: txRef,
-        userId: adjustTargetUser.id,
-        userName: adjustTargetUser.name,
-        userEmail: adjustTargetUser.email,
-        userPhone: adjustTargetUser.phone,
-        userRole: adjustTargetUser.role,
-        serviceType: 'admin_adjustment',
-        amount: amtNum,
-        providerCost: amtNum,
-        profit: 0,
-        status: 'successful',
-        recipient: adjustTargetUser.phone,
-        date: new Date().toISOString(),
-        description: `Admin ${adjustType}: ${adjustReason || 'Manual adjustment'}`,
-      };
-      await setDoc(doc(firestoreDb, 'transactions', txRef), adjTx).catch(() => {});
+        // 2. Record transaction in Firestore
+        const txRef = `ADM-ADJ-${Date.now()}`;
+        const adjTx: Transaction = {
+          id: txRef,
+          reference: txRef,
+          userId: adjustTargetUser.id,
+          userName: adjustTargetUser.name,
+          userEmail: adjustTargetUser.email,
+          userPhone: adjustTargetUser.phone,
+          userRole: adjustTargetUser.role,
+          serviceType: 'admin_adjustment',
+          amount: amtNum,
+          providerCost: amtNum,
+          profit: 0,
+          status: 'successful',
+          recipient: adjustTargetUser.phone,
+          date: new Date().toISOString(),
+          description: `Admin ${adjustType}: ${adjustReason || 'Manual adjustment'}`,
+        };
+        await setDoc(doc(firestoreDb, 'transactions', txRef), adjTx).catch(() => {});
+      }
 
       // 3. Sync to API if available
       await fetch(`/api/admin/users/${adjustTargetUser.id}/wallet-adjust`, {
@@ -1192,8 +1204,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         isActive: true,
       };
 
-      // 1. Direct live Firestore persistence
-      await setDoc(doc(firestoreDb, 'dataPlans', planId), planToSave).catch(() => {});
+      // 1. Direct live Firestore persistence when Firebase Admin Auth is active
+      if (isFbAdminSignedIn()) {
+        await setDoc(doc(firestoreDb, 'dataPlans', planId), planToSave).catch(() => {});
+      }
 
       // 2. Sync to API if available
       await fetch('/api/admin/data-plans', {
@@ -1218,8 +1232,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     e.preventDefault();
     if (!editingPlan) return;
     try {
-      // 1. Direct live Firestore persistence
-      await setDoc(doc(firestoreDb, 'dataPlans', editingPlan.id), editingPlan, { merge: true }).catch(() => {});
+      // 1. Direct live Firestore persistence when Firebase Admin Auth is active
+      if (isFbAdminSignedIn()) {
+        await setDoc(doc(firestoreDb, 'dataPlans', editingPlan.id), editingPlan, { merge: true }).catch(() => {});
+      }
 
       // 2. Sync to API if available
       await fetch(`/api/admin/data-plans/${editingPlan.id}`, {
@@ -1244,8 +1260,10 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     try {
       const updatedStatus = !plan.isActive;
 
-      // 1. Direct live Firestore persistence
-      await updateDoc(doc(firestoreDb, 'dataPlans', plan.id), { isActive: updatedStatus }).catch(() => {});
+      // 1. Direct live Firestore persistence when Firebase Admin Auth is active
+      if (isFbAdminSignedIn()) {
+        await updateDoc(doc(firestoreDb, 'dataPlans', plan.id), { isActive: updatedStatus }).catch(() => {});
+      }
 
       // 2. Sync to API if available
       await fetch(`/api/admin/data-plans/${plan.id}`, {
@@ -1570,21 +1588,23 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         successMsg = `User "${deleteConfirmTarget.name}" deleted`;
       }
 
-      // 1. Direct Firestore deletion for instant live synchronization
-      try {
-        if (deleteConfirmTarget.type === 'plan') {
-          await deleteDoc(doc(firestoreDb, 'dataPlans', deleteConfirmTarget.id)).catch(() => {});
-        } else if (deleteConfirmTarget.type === 'disco') {
-          await deleteDoc(doc(firestoreDb, 'electricityDiscos', deleteConfirmTarget.id)).catch(() => {});
-        } else if (deleteConfirmTarget.type === 'cable') {
-          await deleteDoc(doc(firestoreDb, 'cablePackages', deleteConfirmTarget.id)).catch(() => {});
-        } else if (deleteConfirmTarget.type === 'exam') {
-          await deleteDoc(doc(firestoreDb, 'examPins', deleteConfirmTarget.id)).catch(() => {});
-        } else if (deleteConfirmTarget.type === 'user') {
-          await deleteDoc(doc(firestoreDb, 'users', deleteConfirmTarget.id)).catch(() => {});
+      // 1. Direct Firestore deletion when Firebase Admin Auth is active
+      if (isFbAdminSignedIn()) {
+        try {
+          if (deleteConfirmTarget.type === 'plan') {
+            await deleteDoc(doc(firestoreDb, 'dataPlans', deleteConfirmTarget.id)).catch(() => {});
+          } else if (deleteConfirmTarget.type === 'disco') {
+            await deleteDoc(doc(firestoreDb, 'electricityDiscos', deleteConfirmTarget.id)).catch(() => {});
+          } else if (deleteConfirmTarget.type === 'cable') {
+            await deleteDoc(doc(firestoreDb, 'cablePackages', deleteConfirmTarget.id)).catch(() => {});
+          } else if (deleteConfirmTarget.type === 'exam') {
+            await deleteDoc(doc(firestoreDb, 'examPins', deleteConfirmTarget.id)).catch(() => {});
+          } else if (deleteConfirmTarget.type === 'user') {
+            await deleteDoc(doc(firestoreDb, 'users', deleteConfirmTarget.id)).catch(() => {});
+          }
+        } catch (fsErr) {
+          console.warn('Firestore direct delete note:', fsErr);
         }
-      } catch (fsErr) {
-        console.warn('Firestore direct delete note:', fsErr);
       }
 
       // 2. Sync to API if available
@@ -1642,10 +1662,12 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleSaveSettings = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      // 1. Direct live Firestore persistence
-      await setDoc(doc(firestoreDb, 'systemSettings', 'general'), settings, { merge: true }).catch(err => {
-        console.warn('Firestore settings save notice:', err);
-      });
+      // 1. Direct live Firestore persistence when Firebase Admin Auth is active
+      if (isFbAdminSignedIn()) {
+        await setDoc(doc(firestoreDb, 'systemSettings', 'general'), settings, { merge: true }).catch(err => {
+          console.warn('Firestore settings save notice:', err);
+        });
+      }
 
       // 2. Sync to API if available
       const res = await fetch('/api/settings', {

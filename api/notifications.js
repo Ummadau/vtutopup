@@ -9,7 +9,7 @@ export default async function handler(req, res) {
     notifications: [
       {
         id: 'notif_welcome',
-        title: 'Welcome to NAEEM DATA SUB',
+        title: 'Welcome to NPay',
         message: 'Fast, automated VTU & digital services are active on your account.',
         type: 'info',
         read: false,

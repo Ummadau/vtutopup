@@ -2,7 +2,7 @@
   "entities": {
     "User": {
       "title": "User",
-      "description": "User account in NAEEM DATA SUB platform",
+      "description": "User account in NPay platform",
       "type": "object",
       "properties": {
         "id": { "type": "string" },

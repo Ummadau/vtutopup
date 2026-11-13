@@ -73,7 +73,7 @@ export function parseTransactionFailureReason(failureReason?: string): FailureRe
       tooltipTitle: 'Insufficient Provider Balance',
       tooltipExplanation:
         'Upstream provider gateway API account balance is low. Provider account requires wallet funding to process orders.',
-      rawReason: rawReason || 'Upstream VTUNaija/API gateway balance is insufficient.',
+      rawReason: rawReason || 'Upstream service gateway balance is insufficient.',
     };
   }
 

@@ -16,7 +16,8 @@ import {
   Fingerprint
 } from 'lucide-react';
 import { collection, query, where, getDocs } from 'firebase/firestore';
-import { firestoreDb } from '../lib/firebase.ts';
+import { updatePassword } from 'firebase/auth';
+import { firestoreDb, auth } from '../lib/firebase.ts';
 import { User } from '../types/index.ts';
 import { registerBiometricAuth, getStoredBiometricCredential } from '../lib/webauthn.ts';
 
@@ -40,7 +41,10 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   const [showReferralDetails, setShowReferralDetails] = useState(false);
   const [copiedLink, setCopiedLink] = useState(false);
   const [showPasswordChange, setShowPasswordChange] = useState(false);
-  const [passSuccess, setPassSuccess] = useState(false);
+  const [newPasswordInput, setNewPasswordInput] = useState('');
+  const [confirmNewPasswordInput, setConfirmNewPasswordInput] = useState('');
+  const [passLoading, setPassLoading] = useState(false);
+  const [passMessage, setPassMessage] = useState<{ type: 'success' | 'error'; text: string } | null>(null);
 
   // Referred users state from Firestore
   const [referredUsersList, setReferredUsersList] = useState<any[]>([]);
@@ -84,29 +88,6 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   const fetchReferredUsers = async () => {
     setLoadingReferrals(true);
     try {
-      // 1. Query Firestore for referred users
-      const usersRef = collection(firestoreDb, 'users');
-      const q = query(usersRef, where('referredBy', '==', user.referralCode));
-      const snap = await getDocs(q).catch(() => null);
-
-      let fsUsers: any[] = [];
-      if (snap && !snap.empty) {
-        snap.forEach(d => {
-          const data = d.data();
-          fsUsers.push({
-            id: d.id,
-            name: data.name || 'Referred User',
-            email: data.email || '',
-            phone: data.phone || '',
-            createdAt: data.createdAt || new Date().toISOString(),
-            status: data.status || 'active',
-            totalTransactionsCount: data.totalTransactionsCount || 0,
-            commissionEarned: data.referralEarnings || (user.referralEarnings > 0 ? 1200 : 0),
-          });
-        });
-      }
-
-      // 2. Query API route for computed referral commissions
       const res = await fetch('/api/user/referrals', {
         headers: { 'x-user-id': user.id },
       }).catch(() => null);
@@ -119,7 +100,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
         }
       }
 
-      setReferredUsersList(fsUsers);
+      setReferredUsersList([]);
     } catch (err) {
       console.warn('Referred users fetch note:', err);
     } finally {
@@ -168,6 +149,49 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
     }
   };
 
+  const handleUpdatePassword = async (e: React.FormEvent) => {
+    e.preventDefault();
+    setPassMessage(null);
+
+    if (!newPasswordInput || newPasswordInput.length < 6) {
+      setPassMessage({ type: 'error', text: 'New password must be at least 6 characters.' });
+      return;
+    }
+    if (newPasswordInput !== confirmNewPasswordInput) {
+      setPassMessage({ type: 'error', text: 'Passwords do not match.' });
+      return;
+    }
+
+    setPassLoading(true);
+    try {
+      let updated = false;
+      if (auth.currentUser) {
+        try {
+          await updatePassword(auth.currentUser, newPasswordInput);
+          updated = true;
+        } catch (fbErr: any) {
+          if (fbErr.code === 'auth/requires-recent-login') {
+            throw new Error('For security, please log out and log back in before changing your password.');
+          }
+          throw new Error(fbErr.message || 'Failed to update password.');
+        }
+      }
+
+      if (!updated) {
+        throw new Error('Password updates require an active email or Google sign-in session.');
+      }
+
+      setPassMessage({ type: 'success', text: 'Account password updated successfully!' });
+      setNewPasswordInput('');
+      setConfirmNewPasswordInput('');
+      setTimeout(() => setPassMessage(null), 3500);
+    } catch (err: any) {
+      setPassMessage({ type: 'error', text: err.message || 'Unable to update password.' });
+    } finally {
+      setPassLoading(false);
+    }
+  };
+
   const referralLink = `${window.location.origin}/?ref=${user.referralCode}`;
 
   const handleCopyLink = () => {
@@ -188,7 +212,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
             <ArrowLeft className="w-4 h-4" />
           </button>
           <div className="text-center">
-            <span className="text-sm font-black tracking-wider uppercase">NAEEM DATA SUB</span>
+            <span className="text-sm font-black tracking-wider uppercase">NPAY</span>
           </div>
           <div className="w-8" />
         </div>
@@ -269,20 +293,38 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
             </button>
 
             {showPasswordChange && (
-              <div className="p-4 rounded-2xl bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800 space-y-2 text-xs">
+              <form onSubmit={handleUpdatePassword} className="p-4 rounded-2xl bg-purple-50 dark:bg-purple-950/40 border border-purple-200 dark:border-purple-800 space-y-2 text-xs">
+                {passMessage && (
+                  <div className={`p-2 rounded-xl text-[11px] font-bold ${passMessage.type === 'success' ? 'bg-emerald-100 text-emerald-800 dark:bg-emerald-950 dark:text-emerald-300' : 'bg-rose-100 text-rose-800 dark:bg-rose-950 dark:text-rose-300'}`}>
+                    {passMessage.text}
+                  </div>
+                )}
                 <input
                   type="password"
-                  placeholder="New Password"
-                  className="w-full px-3 py-2 rounded-xl border border-purple-200 dark:border-purple-800 bg-white dark:bg-slate-900 text-xs font-semibold"
+                  minLength={6}
+                  required
+                  value={newPasswordInput}
+                  onChange={(e) => setNewPasswordInput(e.target.value)}
+                  placeholder="New Password (min 6 characters)"
+                  className="w-full px-3 py-2 rounded-xl border border-purple-200 dark:border-purple-800 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-900 dark:text-white"
+                />
+                <input
+                  type="password"
+                  minLength={6}
+                  required
+                  value={confirmNewPasswordInput}
+                  onChange={(e) => setConfirmNewPasswordInput(e.target.value)}
+                  placeholder="Confirm New Password"
+                  className="w-full px-3 py-2 rounded-xl border border-purple-200 dark:border-purple-800 bg-white dark:bg-slate-900 text-xs font-semibold text-slate-900 dark:text-white"
                 />
                 <button
-                  type="button"
-                  onClick={() => { setPassSuccess(true); setTimeout(() => setPassSuccess(false), 2000); }}
-                  className="w-full py-2 rounded-xl bg-purple-700 text-white font-bold text-xs"
+                  type="submit"
+                  disabled={passLoading}
+                  className="w-full py-2 rounded-xl bg-purple-700 hover:bg-purple-800 text-white font-bold text-xs transition disabled:opacity-50"
                 >
-                  {passSuccess ? 'Password Updated!' : 'Save New Password'}
+                  {passLoading ? 'Updating Password...' : 'Save New Password'}
                 </button>
-              </div>
+              </form>
             )}
 
             {/* Change Transaction PIN */}

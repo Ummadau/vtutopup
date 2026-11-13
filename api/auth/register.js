@@ -1,4 +1,10 @@
-import { findUserByIdentifier, createFirestoreUser, normalizePhone } from './_auth_helpers.js';
+import {
+  findUserByIdentifier,
+  createFirestoreUser,
+  normalizePhone,
+  hashPassword,
+  sanitizeUser,
+} from './_auth_helpers.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -18,33 +24,41 @@ export default async function handler(req, res) {
       try { body = JSON.parse(body); } catch {}
     }
 
-    const { name, phone, email, referralCode } = body;
-    if (!name || !phone || !email) {
-      return res.status(400).json({ error: 'Please provide all required fields' });
+    const { name, phone, email, password, referralCode, uid } = body;
+    if (!name || !phone || !email || !password) {
+      return res.status(400).json({ error: 'Please provide all required fields including password' });
+    }
+    if (String(password).length < 6) {
+      return res.status(400).json({ error: 'Password must be at least 6 characters' });
     }
 
     const cleanEmail = String(email).trim().toLowerCase();
     const cleanPhone = normalizePhone(phone);
 
     // Check if user already exists
-    const existing = await findUserByIdentifier(cleanEmail) || await findUserByIdentifier(cleanPhone);
+    const existing = (await findUserByIdentifier(cleanEmail)) || (await findUserByIdentifier(cleanPhone));
     if (existing) {
       return res.status(400).json({ error: 'An account with this email or phone number already exists' });
     }
 
-    const newId = `usr_${Date.now()}`;
-    const generatedRefCode = name.replace(/\s+/g, '').slice(0, 4).toUpperCase() + Math.floor(100 + Math.random() * 900);
+    const safeUid =
+      typeof uid === 'string' && /^[a-zA-Z0-9_-]{6,128}$/.test(uid)
+        ? uid
+        : `usr_${Date.now()}`;
+    const generatedRefCode =
+      String(name).replace(/\s+/g, '').slice(0, 4).toUpperCase() + Math.floor(100 + Math.random() * 900);
 
     const newUser = {
-      id: newId,
+      id: safeUid,
       name: String(name).trim(),
       email: cleanEmail,
-      phone: String(phone).trim(),
-      role: (cleanEmail === 'naeemummadau@gmail.com' || cleanEmail === 'ahmadnaim2877@gmail.com') ? 'admin' : 'customer',
+      phone: cleanPhone || String(phone).trim(),
+      passwordHash: hashPassword(password),
+      role: cleanEmail === 'naeemummadau@gmail.com' || cleanEmail === 'ahmadnaim2877@gmail.com' ? 'admin' : 'customer',
       status: 'active',
       isVerified: true,
       referralCode: generatedRefCode,
-      referredBy: referralCode || null,
+      referredBy: referralCode ? String(referralCode).trim() : null,
       walletBalance: 0,
       totalSavings: 0,
       referralEarnings: 0,
@@ -57,7 +71,7 @@ export default async function handler(req, res) {
 
     await createFirestoreUser(newUser);
 
-    return res.status(200).json({ success: true, user: newUser });
+    return res.status(200).json({ success: true, user: sanitizeUser(newUser) });
   } catch (err) {
     console.error('Register API Error:', err);
     return res.status(500).json({ error: err.message || 'Registration failed' });

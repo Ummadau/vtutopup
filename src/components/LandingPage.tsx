@@ -36,7 +36,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
   const faqs = [
     {
-      q: 'How fast is data and airtime delivery on NAEEM DATA SUB?',
+      q: 'How fast is data and airtime delivery on NPay?',
       a: 'All transactions are automated and delivered within 5 to 15 seconds directly to the recipient phone number. We maintain high-speed connections with MTN, Airtel, Glo, and 9mobile VTU gateways.',
     },
     {
@@ -167,7 +167,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
               <div className="relative mx-auto max-w-sm sm:max-w-md rounded-3xl overflow-hidden shadow-2xl border-4 border-white dark:border-slate-800 ring-1 ring-purple-500/20">
                 <img
                   src="/public/assets/aistudio/file_000000008bcc8243a78738db4143d576_09f5ebcf.png"
-                  alt="NAEEM DATA SUB Nigerian VTU Platform"
+                  alt="NPay Nigerian VTU Platform"
                   className="w-full h-auto object-cover object-top"
                   style={{ maxHeight: '480px' }}
                 />
@@ -186,11 +186,11 @@ export const LandingPage: React.FC<LandingPageProps> = ({
         </div>
       </section>
 
-      {/* Why Choose NAEEM DATA SUB section matching mockup banner */}
+      {/* Why Choose NPay section matching mockup banner */}
       <section id="why-us" className="py-12 bg-gradient-to-r from-purple-950 via-purple-900 to-indigo-950 text-white">
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
           <div className="text-center max-w-2xl mx-auto mb-8">
-            <h2 className="text-2xl sm:text-3xl font-black">Why Choose NAEEM DATA SUB?</h2>
+            <h2 className="text-2xl sm:text-3xl font-black">Why Choose NPay?</h2>
             <p className="text-xs sm:text-sm text-purple-200 mt-1">
               Built specifically for the Nigerian digital lifestyle and business environment
             </p>
@@ -391,7 +391,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
           <div className="space-y-3">
             <Logo size="md" white />
             <p className="text-xs text-slate-400 leading-relaxed">
-              NAEEM DATA SUB is Nigeria's foremost automated platform for Virtual Top-Up, instant data subscriptions, electricity tokens, cable TV, and exam PINs.
+              NPay is Nigeria's foremost automated platform for Virtual Top-Up, instant data subscriptions, electricity tokens, cable TV, and exam PINs.
             </p>
           </div>
 
@@ -432,7 +432,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
         </div>
 
         <div className="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 mt-8 pt-8 border-t border-slate-800 text-center text-xs text-slate-500">
-          © {new Date().getFullYear()} NAEEM DATA SUB. All rights reserved. Fast, Affordable & Reliable Digital Services.
+          © {new Date().getFullYear()} NPay. All rights reserved. Fast, Affordable & Reliable Digital Services.
         </div>
       </footer>
     </div>

@@ -6,100 +6,201 @@ service cloud.firestore {
       return request.auth != null;
     }
 
+    function isValidId(id) {
+      return id is string && id.size() > 0 && id.size() <= 128 && id.matches('^[a-zA-Z0-9_\\-\\.]+$');
+    }
+
+    function incoming() {
+      return request.resource.data;
+    }
+
+    function existing() {
+      return resource.data;
+    }
+
+    function isAdminsEmail() {
+      return isSignedIn() && (
+        request.auth.token.email == 'naeemummadau@gmail.com' ||
+        request.auth.token.email == 'ahmadnaim2877@gmail.com'
+      );
+    }
+
     function isAdmin() {
-      return (
-        (isSignedIn() && (
-          request.auth.token.email == 'naeemummadau@gmail.com' ||
-          request.auth.token.email == 'ahmadnaim2877@gmail.com' ||
-          exists(/databases/$(database)/documents/admins/$(request.auth.uid))
-        )) ||
-        (request.auth == null)
+      return isAdminsEmail() || (
+        isSignedIn() && exists(/databases/$(database)/documents/admins/$(request.auth.uid))
       );
     }
 
     function isOwner(userId) {
-      return (
-        (isSignedIn() && (
-          request.auth.uid == userId ||
-          request.auth.token.email == 'ahmadnaim2877@gmail.com' ||
-          (resource != null && resource.data.email == request.auth.token.email) ||
-          (request.resource != null && request.resource.data.email == request.auth.token.email)
-        )) ||
-        (request.auth == null)
+      return isSignedIn() && (
+        isAdmin() ||
+        request.auth.uid == userId ||
+        (resource != null && (
+          resource.data.id == request.auth.uid ||
+          (request.auth.token.email != null && resource.data.email == request.auth.token.email)
+        ))
       );
     }
 
-    // Users Collection (Publicly readable so profiles and usernames sync, Owner/Admin writable)
+    function isSecretSetting(settingId) {
+      return settingId in ['vtu_config', 'nc_config', 'unitybills_config', 'billstack_config'];
+    }
+
+    // Default catch-all deny rule
+    match /{document=**} {
+      allow read, write: if false;
+    }
+
+    // Admins Registry
+    match /admins/{adminId} {
+      allow read: if isSignedIn() && request.auth.uid == adminId;
+      allow write: if isAdmin();
+    }
+
+    // 1. Users Collection: strict PII isolation and role-escalation guard
     match /users/{userId} {
-      allow read: if true;
-      allow write: if isOwner(userId) || isAdmin();
+      allow get: if isValidId(userId) && isOwner(userId);
+      allow list: if isAdmin() || (
+        isSignedIn() && (
+          resource.data.id == request.auth.uid ||
+          (request.auth.token.email != null && resource.data.email == request.auth.token.email)
+        )
+      );
+      allow create: if isValidId(userId) && isSignedIn() && (
+        isAdmin() || (
+          (request.auth.uid == userId || (request.auth.token.email != null && incoming().email == request.auth.token.email)) &&
+          (!('role' in incoming()) || incoming().role == 'customer') &&
+          (!('name' in incoming()) || (incoming().name is string && incoming().name.size() <= 120)) &&
+          (!('phone' in incoming()) || (incoming().phone is string && incoming().phone.size() <= 30))
+        )
+      );
+      allow update: if isValidId(userId) && isSignedIn() && (
+        isAdmin() || (
+          isOwner(userId) &&
+          (!incoming().diff(existing()).affectedKeys().hasAny(['role', 'status', 'isVerified', 'id', 'email', 'referralEarnings']))
+        )
+      );
+      allow delete: if isValidId(userId) && isAdmin();
     }
 
-    // Transactions Collection (Readable so user history syncs across Vercel and AI Studio)
+    // 2. Transactions Collection: users can read and log only their own transactions; updates/deletes are admin-only
     match /transactions/{transactionId} {
-      allow read: if true;
-      allow create: if true;
-      allow update, delete: if isAdmin();
+      allow get: if isValidId(transactionId) && isSignedIn() && (
+        isAdmin() || (
+          resource != null && (
+            resource.data.userId == request.auth.uid ||
+            (request.auth.token.email != null && resource.data.userEmail == request.auth.token.email)
+          )
+        )
+      );
+      allow list: if isAdmin() || (
+        isSignedIn() && resource != null && (
+          resource.data.userId == request.auth.uid ||
+          (request.auth.token.email != null && resource.data.userEmail == request.auth.token.email)
+        )
+      );
+      allow create: if isValidId(transactionId) && isSignedIn() && (
+        isAdmin() || (
+          incoming().userId == request.auth.uid &&
+          incoming().amount is number &&
+          incoming().amount >= 0
+        )
+      );
+      allow update, delete: if isValidId(transactionId) && isAdmin();
     }
 
-    // Data Plans Collection (Publicly readable, Admin writable)
+    // 3. Public Service Catalogs (Public read, Admin write only)
     match /dataPlans/{planId} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow write: if isValidId(planId) && isAdmin();
     }
 
-    // Airtime Discounts Collection
     match /airtimeDiscounts/{networkId} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow write: if isValidId(networkId) && isAdmin();
     }
 
-    // Electricity Discos Collection
     match /electricityDiscos/{discoId} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow write: if isValidId(discoId) && isAdmin();
     }
 
-    // Cable Packages Collection
     match /cablePackages/{packageId} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow write: if isValidId(packageId) && isAdmin();
     }
 
-    // Exam PINs Collection
     match /examPins/{pinId} {
       allow read: if true;
-      allow write: if isAdmin();
+      allow write: if isValidId(pinId) && isAdmin();
     }
 
-    // Support Tickets Collection
-    match /supportTickets/{ticketId} {
-      allow read: if true;
-      allow create, update: if true;
-      allow delete: if isAdmin();
-    }
-
-    // System Settings Collection
+    // 4. Platform & Gateway Configuration (API secret docs strictly admin-only)
     match /systemSettings/{settingId} {
-      allow read: if true;
-      allow write: if isAdmin();
+      allow read: if isAdmin() || (isSignedIn() && !isSecretSetting(settingId));
+      allow write: if isValidId(settingId) && isAdmin();
     }
 
-    // Manual Funding Requests Collection
+    match /settings/{settingId} {
+      allow read: if isSignedIn();
+      allow write: if isValidId(settingId) && isAdmin();
+    }
+
+    // 5. Support Tickets (User reads/writes own tickets; Admin manages all)
+    match /supportTickets/{ticketId} {
+      allow get: if isValidId(ticketId) && isSignedIn() && (
+        isAdmin() || (resource != null && resource.data.userId == request.auth.uid)
+      );
+      allow list: if isAdmin() || (
+        isSignedIn() && resource != null && resource.data.userId == request.auth.uid
+      );
+      allow create: if isValidId(ticketId) && isSignedIn() && (
+        isAdmin() || incoming().userId == request.auth.uid
+      );
+      allow update: if isValidId(ticketId) && isSignedIn() && (
+        isAdmin() || (
+          resource != null &&
+          resource.data.userId == request.auth.uid &&
+          !incoming().diff(existing()).affectedKeys().hasAny(['userId', 'id'])
+        )
+      );
+      allow delete: if isValidId(ticketId) && isAdmin();
+    }
+
+    // 6. Manual Funding Requests (Both collection naming conventions secured)
     match /manualFundingRequests/{requestId} {
-      allow read, create: if true;
-      allow update, delete: if isAdmin();
+      allow get: if isValidId(requestId) && isSignedIn() && (
+        isAdmin() || (resource != null && resource.data.userId == request.auth.uid)
+      );
+      allow list: if isAdmin() || (
+        isSignedIn() && resource != null && resource.data.userId == request.auth.uid
+      );
+      allow create: if isValidId(requestId) && isSignedIn() && (
+        isAdmin() || incoming().userId == request.auth.uid
+      );
+      allow update, delete: if isValidId(requestId) && isAdmin();
     }
 
-    // Audit Logs Collection
+    match /manual_funding_requests/{requestId} {
+      allow get: if isValidId(requestId) && isSignedIn() && (
+        isAdmin() || (resource != null && resource.data.userId == request.auth.uid)
+      );
+      allow list: if isAdmin() || (
+        isSignedIn() && resource != null && resource.data.userId == request.auth.uid
+      );
+      allow create: if isValidId(requestId) && isSignedIn() && (
+        isAdmin() || incoming().userId == request.auth.uid
+      );
+      allow update, delete: if isValidId(requestId) && isAdmin();
+    }
+
+    // 7. Audit & Webhook Diagnostic Logs (Admin only)
     match /auditLogs/{logId} {
-      allow read: if true;
-      allow write: if isAdmin();
+      allow read, write: if isAdmin();
     }
 
-    // Webhook Logs Collection (Diagnostic logs for incoming utility and payment webhooks)
     match /webhook_logs/{logId} {
-      allow read, write: if true;
+      allow read, write: if isAdmin();
     }
   }
 }

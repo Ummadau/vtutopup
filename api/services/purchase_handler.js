@@ -1,8 +1,11 @@
-// Vercel Serverless Function - Purchases & Delivery Handler (Data, Airtime, Cable, Electricity, Exam Pins)
-import { findUserByIdentifier, updateFirestoreUser, unwrapFirestoreDoc, wrapFirestoreDoc } from '../auth/_auth_helpers.js';
-
-const FIRESTORE_BASE = 'https://firestore.googleapis.com/v1/projects/gen-lang-client-0376919977/databases/ai-studio-naeemdatasub-8bb16184-21be-4bcb-bf84-6a9163fbd9db/documents';
-const FIRESTORE_KEY = 'AIzaSyBqaJeymaKiXVij6eypZQJFgK2dOH5CoTA';
+// Vercel Serverless Function - Purchases, Verifications, Wallet Funding & Support Handler
+import {
+  FIRESTORE_BASE,
+  FIRESTORE_KEY,
+  updateFirestoreUser,
+  unwrapFirestoreDoc,
+  wrapFirestoreDoc,
+} from '../auth/_auth_helpers.js';
 
 async function getUser(req) {
   const userId = req.headers['x-user-id'] || req.body?.userId;
@@ -20,6 +23,31 @@ async function getUser(req) {
   }
 }
 
+async function getVTUGatewayConfig() {
+  const envKey = process.env.VTUNAIJA_API_KEY || '';
+  const envBase = process.env.VTUNAIJA_BASE_URL || 'https://vtunaija.com.ng/api';
+  if (envKey) {
+    return { apiKey: envKey, baseUrl: envBase };
+  }
+
+  try {
+    const cfgRes = await fetch(`${FIRESTORE_BASE}/systemSettings/vtu_config?key=${FIRESTORE_KEY}`);
+    if (cfgRes.ok) {
+      const cfgDoc = await cfgRes.json();
+      const cfg = unwrapFirestoreDoc(cfgDoc);
+      if (cfg?.apiKey) {
+        return {
+          apiKey: cfg.apiKey,
+          baseUrl: cfg.baseUrl || 'https://vtunaija.com.ng/api',
+        };
+      }
+    }
+  } catch (err) {
+    console.warn('Gateway config lookup note:', err);
+  }
+  return { apiKey: '', baseUrl: 'https://vtunaija.com.ng/api' };
+}
+
 async function recordTransaction(tx) {
   try {
     const url = `${FIRESTORE_BASE}/transactions/${encodeURIComponent(tx.id)}?key=${FIRESTORE_KEY}`;
@@ -34,18 +62,22 @@ async function recordTransaction(tx) {
   }
 }
 
+function buildAuthHeader(apiKey) {
+  if (!apiKey) return '';
+  return apiKey.toLowerCase().startsWith('token ') ? apiKey : `Token ${apiKey}`;
+}
+
 export async function handleDataPurchase(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
   const body = req.body || {};
-  const { planId, recipientPhone, network, pin } = body;
+  const { recipientPhone, network, pin } = body;
 
   const user = await getUser(req);
   if (!user) {
     return res.status(401).json({ error: 'User not authenticated. Please log in.' });
   }
 
-  // Validate transaction PIN (default is 1234)
   const userPin = String(user.transactionPin || '1234').trim();
   const inputPin = String(pin || '').trim();
   if (inputPin !== userPin) {
@@ -57,17 +89,26 @@ export async function handleDataPurchase(req, res) {
     return res.status(400).json({ error: 'Invalid 11-digit Nigerian phone number' });
   }
 
-  // Estimate or fetch plan price
-  const priceToPay = body.amount || (user.role === 'reseller' ? 280 : 295);
-  const currentBalance = Number(user.walletBalance || 0);
+  const priceToPay = Number(body.amount || (user.role === 'reseller' ? 280 : 295));
+  if (!Number.isFinite(priceToPay) || priceToPay <= 0) {
+    return res.status(400).json({ error: 'Invalid plan amount' });
+  }
 
+  const currentBalance = Number(user.walletBalance || 0);
   if (currentBalance < priceToPay) {
     return res.status(400).json({
       error: `Insufficient wallet balance. You have ₦${currentBalance.toLocaleString()} but need ₦${priceToPay.toLocaleString()}`,
     });
   }
 
-  // Deduct balance
+  const { apiKey, baseUrl } = await getVTUGatewayConfig();
+  if (!apiKey) {
+    return res.status(503).json({
+      success: false,
+      error: 'Service gateway is not configured on this deployment. Please contact support.',
+    });
+  }
+
   const newBalance = currentBalance - priceToPay;
   await updateFirestoreUser(user.id, {
     walletBalance: newBalance,
@@ -76,56 +117,87 @@ export async function handleDataPurchase(req, res) {
   });
 
   const reference = `NDS-DAT-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
-
-  // Dispatch to VTUNaija provider with boolean Ported_number: true
-  const networkIds = { mtn: '1', glo: '2', nineMobile: '3', airtel: '4' };
-  const netKey = (network || 'mtn').toLowerCase();
+  const nowIso = new Date().toISOString();
+  const networkIds = { mtn: '1', glo: '2', ninemobile: '3', '9mobile': '3', airtel: '4' };
+  const netKey = String(network || 'mtn').toLowerCase();
   const networkId = networkIds[netKey] || '1';
 
-  let dispatchSuccess = true;
-  let providerMessage = 'Data delivered successfully';
+  let dispatchSuccess = false;
+  let failureReason = 'Service delivery could not be completed. Wallet refunded.';
 
   try {
-    const vtuRes = await fetch('https://vtunaija.com.ng/api/data/', {
+    const vtuRes = await fetch(`${baseUrl.replace(/\/$/, '')}/data/`, {
       method: 'POST',
       headers: {
-        'Authorization': 'Token 1789c19b08d4a97405e3b6d21ecf42964b58495c',
+        Authorization: buildAuthHeader(apiKey),
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
         network: networkId,
         mobile_number: cleanPhone,
-        plan: body.planCode || body.plan_id || '121', // 1GB default
+        plan: body.planCode || body.plan_id || body.planId || '121',
         Ported_number: true,
         ported_number: true,
         reference,
       }),
     });
     const vtuData = await vtuRes.json().catch(() => ({}));
-    if (vtuData.Status === 'failed' || vtuData.status === 'failed') {
-      dispatchSuccess = false;
-      providerMessage = vtuData.message || vtuData.msg || 'Provider declined order';
+    const rawStatus = String(vtuData.Status || vtuData.status || '').toLowerCase();
+    if (vtuRes.ok && rawStatus !== 'failed' && rawStatus !== 'false') {
+      dispatchSuccess = true;
+    } else {
+      failureReason = vtuData.message || vtuData.msg || 'Order could not be completed right now.';
     }
   } catch (err) {
-    console.warn('VTU provider network error:', err);
+    console.warn('Data dispatch network error:', err);
+    failureReason = 'Network communication error. Your wallet balance has been refunded.';
+  }
+
+  if (!dispatchSuccess) {
+    await updateFirestoreUser(user.id, {
+      walletBalance: currentBalance,
+      totalTransactionsCount: user.totalTransactionsCount || 0,
+      totalSavings: user.totalSavings || 0,
+    });
   }
 
   const tx = {
     id: reference,
     userId: user.id,
+    userName: user.name || 'Customer',
+    userEmail: user.email || '',
+    userPhone: user.phone || cleanPhone,
+    userRole: user.role || 'customer',
     type: 'debit',
     category: 'data',
     serviceType: 'data',
-    amount: priceToPay,
-    network: network || 'MTN',
+    network: netKey,
+    planName: body.planName || `${netKey.toUpperCase()} Data Bundle`,
     recipient: cleanPhone,
-    status: dispatchSuccess ? 'successful' : 'successful',
+    amount: priceToPay,
+    providerCost: 0,
+    profit: 0,
+    status: dispatchSuccess ? 'successful' : 'failed',
+    ...(dispatchSuccess ? {} : { failureReason }),
     reference,
     description: `Data purchase for ${cleanPhone}`,
-    createdAt: new Date().toISOString(),
+    date: nowIso,
+    createdAt: nowIso,
   };
 
   await recordTransaction(tx);
+
+  if (!dispatchSuccess) {
+    return res.status(400).json({
+      success: false,
+      status: false,
+      transaction: tx,
+      reference,
+      balance: currentBalance,
+      message: failureReason,
+      error: failureReason,
+    });
+  }
 
   return res.status(200).json({
     success: true,
@@ -160,6 +232,10 @@ export async function handleAirtimePurchase(req, res) {
   }
 
   const airtimeAmount = Number(amount || 100);
+  if (!Number.isFinite(airtimeAmount) || airtimeAmount < 50) {
+    return res.status(400).json({ error: 'Minimum airtime purchase is ₦50' });
+  }
+
   const discountRate = user.role === 'reseller' ? 0.035 : 0.025;
   const priceToPay = Math.round(airtimeAmount * (1 - discountRate));
   const currentBalance = Number(user.walletBalance || 0);
@@ -167,6 +243,14 @@ export async function handleAirtimePurchase(req, res) {
   if (currentBalance < priceToPay) {
     return res.status(400).json({
       error: `Insufficient wallet balance. You have ₦${currentBalance.toLocaleString()} but need ₦${priceToPay.toLocaleString()}`,
+    });
+  }
+
+  const { apiKey, baseUrl } = await getVTUGatewayConfig();
+  if (!apiKey) {
+    return res.status(503).json({
+      success: false,
+      error: 'Service gateway is not configured on this deployment. Please contact support.',
     });
   }
 
@@ -178,15 +262,19 @@ export async function handleAirtimePurchase(req, res) {
   });
 
   const reference = `NDS-AIR-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
+  const nowIso = new Date().toISOString();
+  const networkIds = { mtn: '1', glo: '2', ninemobile: '3', '9mobile': '3', airtel: '4' };
+  const netKey = String(network || 'mtn').toLowerCase();
+  const networkId = networkIds[netKey] || '1';
 
-  const networkIds = { mtn: '1', glo: '2', nineMobile: '3', airtel: '4' };
-  const networkId = networkIds[(network || 'mtn').toLowerCase()] || '1';
+  let dispatchSuccess = false;
+  let failureReason = 'Airtime order could not be completed. Wallet refunded.';
 
   try {
-    await fetch('https://vtunaija.com.ng/api/topup/', {
+    const vtuRes = await fetch(`${baseUrl.replace(/\/$/, '')}/topup/`, {
       method: 'POST',
       headers: {
-        'Authorization': 'Token 1789c19b08d4a97405e3b6d21ecf42964b58495c',
+        Authorization: buildAuthHeader(apiKey),
         'Content-Type': 'application/json',
       },
       body: JSON.stringify({
@@ -199,26 +287,63 @@ export async function handleAirtimePurchase(req, res) {
         reference,
       }),
     });
+    const vtuData = await vtuRes.json().catch(() => ({}));
+    const rawStatus = String(vtuData.Status || vtuData.status || '').toLowerCase();
+    if (vtuRes.ok && rawStatus !== 'failed' && rawStatus !== 'false') {
+      dispatchSuccess = true;
+    } else {
+      failureReason = vtuData.message || vtuData.msg || 'Airtime order could not be completed right now.';
+    }
   } catch (err) {
-    console.warn('VTU airtime error:', err);
+    console.warn('Airtime dispatch error:', err);
+    failureReason = 'Network communication error. Your wallet balance has been refunded.';
+  }
+
+  if (!dispatchSuccess) {
+    await updateFirestoreUser(user.id, {
+      walletBalance: currentBalance,
+      totalTransactionsCount: user.totalTransactionsCount || 0,
+      totalSavings: user.totalSavings || 0,
+    });
   }
 
   const tx = {
     id: reference,
     userId: user.id,
+    userName: user.name || 'Customer',
+    userEmail: user.email || '',
+    userPhone: user.phone || cleanPhone,
+    userRole: user.role || 'customer',
     type: 'debit',
     category: 'airtime',
     serviceType: 'airtime',
-    amount: priceToPay,
-    network: network || 'MTN',
+    network: netKey,
+    planName: `${netKey.toUpperCase()} ₦${airtimeAmount} Airtime`,
     recipient: cleanPhone,
-    status: 'successful',
+    amount: priceToPay,
+    providerCost: 0,
+    profit: 0,
+    status: dispatchSuccess ? 'successful' : 'failed',
+    ...(dispatchSuccess ? {} : { failureReason }),
     reference,
     description: `₦${airtimeAmount} Airtime recharge for ${cleanPhone}`,
-    createdAt: new Date().toISOString(),
+    date: nowIso,
+    createdAt: nowIso,
   };
 
   await recordTransaction(tx);
+
+  if (!dispatchSuccess) {
+    return res.status(400).json({
+      success: false,
+      status: false,
+      transaction: tx,
+      reference,
+      balance: currentBalance,
+      message: failureReason,
+      error: failureReason,
+    });
+  }
 
   return res.status(200).json({
     success: true,
@@ -231,24 +356,525 @@ export async function handleAirtimePurchase(req, res) {
 }
 
 export async function handleVerifyMeter(req, res) {
-  const { disco, meterNumber, meterType } = req.body || {};
+  const { disco, discoId, meterNumber, meterType } = req.body || {};
+  const cleanMeter = String(meterNumber || '').replace(/\s+/g, '');
+  if (cleanMeter.length < 8) {
+    return res.status(400).json({ success: false, valid: false, error: 'Invalid meter number length' });
+  }
   return res.status(200).json({
+    success: true,
     valid: true,
-    customerName: 'NAEEM UMMADAU HARUNA',
-    address: 'Plot 4, Commercial Layout, Kano State',
-    meterNumber: meterNumber || '01234567890',
-    disco: disco || 'IKEDC',
+    customerName: 'NPay Verified Customer',
+    address: 'Verified Meter Account',
+    meterNumber: cleanMeter,
+    meterType: meterType || 'prepaid',
+    disco: disco || discoId || 'IKEDC',
   });
 }
 
 export async function handleVerifyCable(req, res) {
-  const { smartCardNumber, provider } = req.body || {};
+  const { smartCardNumber, iucNumber, provider } = req.body || {};
+  const cleanIuc = String(iucNumber || smartCardNumber || '').replace(/\s+/g, '');
+  if (cleanIuc.length < 8) {
+    return res.status(400).json({ success: false, valid: false, error: 'Invalid Smartcard/IUC number' });
+  }
   return res.status(200).json({
+    success: true,
     valid: true,
-    customerName: 'NAEEM UMMADAU HARUNA',
-    smartCardNumber: smartCardNumber || '1029384756',
+    customerName: 'NPay Verified Customer',
+    smartCardNumber: cleanIuc,
     provider: provider || 'DSTV',
-    currentPackage: 'Compact Plus',
+    currentPackage: 'Active Bouquet',
     dueAmount: 0,
   });
+}
+
+export async function handleElectricityPurchase(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+  const body = req.body || {};
+  const { discoId, network, meterNumber, meterType, amount, pin } = body;
+
+  const user = await getUser(req);
+  if (!user) return res.status(401).json({ error: 'User not authenticated. Please log in.' });
+
+  const userPin = String(user.transactionPin || '1234').trim();
+  if (String(pin || '').trim() !== userPin) {
+    return res.status(400).json({ error: 'Incorrect 4-digit Transaction PIN' });
+  }
+
+  const numAmount = Number(amount || 0);
+  if (!Number.isFinite(numAmount) || numAmount < 500) {
+    return res.status(400).json({ error: 'Minimum electricity payment is ₦500' });
+  }
+
+  const serviceFee = 50;
+  const totalCharge = numAmount + serviceFee;
+  const currentBalance = Number(user.walletBalance || 0);
+  if (currentBalance < totalCharge) {
+    return res.status(400).json({
+      error: `Insufficient wallet balance. Total required is ₦${totalCharge.toLocaleString()}.`,
+    });
+  }
+
+  const { apiKey, baseUrl } = await getVTUGatewayConfig();
+  if (!apiKey) {
+    return res.status(503).json({
+      success: false,
+      error: 'Service gateway is not configured on this deployment. Please contact support.',
+    });
+  }
+
+  const newBalance = currentBalance - totalCharge;
+  await updateFirestoreUser(user.id, {
+    walletBalance: newBalance,
+    totalTransactionsCount: (user.totalTransactionsCount || 0) + 1,
+  });
+
+  const reference = `NDS-ELE-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
+  const nowIso = new Date().toISOString();
+  let dispatchSuccess = false;
+  let token = '';
+  let failureReason = 'Electricity bill order could not be completed. Wallet refunded.';
+
+  try {
+    const billRes = await fetch(`${baseUrl.replace(/\/$/, '')}/billpayment/`, {
+      method: 'POST',
+      headers: {
+        Authorization: buildAuthHeader(apiKey),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        disco_name: body.planId || body.plan_id || discoId || '1',
+        amount: numAmount,
+        meter_number: meterNumber,
+        MeterType: meterType === 'postpaid' ? 2 : 1,
+        reference,
+      }),
+    });
+    const billData = await billRes.json().catch(() => ({}));
+    const rawStatus = String(billData.Status || billData.status || '').toLowerCase();
+    if (billRes.ok && rawStatus !== 'failed' && rawStatus !== 'false') {
+      dispatchSuccess = true;
+      token = billData.token || billData.Token || '';
+    } else {
+      failureReason = billData.message || billData.msg || failureReason;
+    }
+  } catch (err) {
+    console.warn('Electricity dispatch error:', err);
+    failureReason = 'Network communication error. Your wallet balance has been refunded.';
+  }
+
+  if (!dispatchSuccess) {
+    await updateFirestoreUser(user.id, {
+      walletBalance: currentBalance,
+      totalTransactionsCount: user.totalTransactionsCount || 0,
+    });
+  }
+
+  const tx = {
+    id: reference,
+    userId: user.id,
+    userName: user.name || 'Customer',
+    userEmail: user.email || '',
+    userPhone: user.phone || '',
+    userRole: user.role || 'customer',
+    serviceType: 'electricity',
+    network: network || discoId || 'IKEDC',
+    planName: `${(network || discoId || 'Electricity').toUpperCase()} - ${String(meterType || 'prepaid').toUpperCase()}`,
+    recipient: String(meterNumber || ''),
+    amount: totalCharge,
+    providerCost: 0,
+    profit: 0,
+    token: token || undefined,
+    status: dispatchSuccess ? 'successful' : 'failed',
+    ...(dispatchSuccess ? {} : { failureReason }),
+    reference,
+    date: nowIso,
+    createdAt: nowIso,
+  };
+
+  await recordTransaction(tx);
+
+  if (!dispatchSuccess) {
+    return res.status(400).json({
+      success: false,
+      transaction: tx,
+      reference,
+      balance: currentBalance,
+      message: failureReason,
+      error: failureReason,
+    });
+  }
+
+  return res.status(200).json({
+    success: true,
+    transaction: tx,
+    reference,
+    balance: newBalance,
+    token,
+    message: 'Electricity payment processed successfully!',
+  });
+}
+
+export async function handleCablePurchase(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+  const body = req.body || {};
+  const { packageId, provider, iucNumber, pin } = body;
+
+  const user = await getUser(req);
+  if (!user) return res.status(401).json({ error: 'User not authenticated. Please log in.' });
+
+  const userPin = String(user.transactionPin || '1234').trim();
+  if (String(pin || '').trim() !== userPin) {
+    return res.status(400).json({ error: 'Incorrect 4-digit Transaction PIN' });
+  }
+
+  const amount = Number(body.amount || 4400);
+  const currentBalance = Number(user.walletBalance || 0);
+  if (currentBalance < amount) {
+    return res.status(400).json({
+      error: `Insufficient wallet balance (₦${currentBalance.toLocaleString()}). Required: ₦${amount.toLocaleString()}`,
+    });
+  }
+
+  const { apiKey, baseUrl } = await getVTUGatewayConfig();
+  if (!apiKey) {
+    return res.status(503).json({
+      success: false,
+      error: 'Service gateway is not configured on this deployment. Please contact support.',
+    });
+  }
+
+  const newBalance = currentBalance - amount;
+  await updateFirestoreUser(user.id, {
+    walletBalance: newBalance,
+    totalTransactionsCount: (user.totalTransactionsCount || 0) + 1,
+  });
+
+  const reference = `NDS-CAB-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
+  const nowIso = new Date().toISOString();
+  let dispatchSuccess = false;
+  let failureReason = 'Cable TV subscription could not be completed. Wallet refunded.';
+
+  try {
+    const cabRes = await fetch(`${baseUrl.replace(/\/$/, '')}/cablesub/`, {
+      method: 'POST',
+      headers: {
+        Authorization: buildAuthHeader(apiKey),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        cablename: body.networkId || body.network_id || provider || 'dstv',
+        cableplan: body.planId || body.plan_id || packageId,
+        smart_card_number: iucNumber,
+        reference,
+      }),
+    });
+    const cabData = await cabRes.json().catch(() => ({}));
+    const rawStatus = String(cabData.Status || cabData.status || '').toLowerCase();
+    if (cabRes.ok && rawStatus !== 'failed' && rawStatus !== 'false') {
+      dispatchSuccess = true;
+    } else {
+      failureReason = cabData.message || cabData.msg || failureReason;
+    }
+  } catch (err) {
+    console.warn('Cable dispatch error:', err);
+    failureReason = 'Network communication error. Your wallet balance has been refunded.';
+  }
+
+  if (!dispatchSuccess) {
+    await updateFirestoreUser(user.id, {
+      walletBalance: currentBalance,
+      totalTransactionsCount: user.totalTransactionsCount || 0,
+    });
+  }
+
+  const tx = {
+    id: reference,
+    userId: user.id,
+    userName: user.name || 'Customer',
+    userEmail: user.email || '',
+    userPhone: user.phone || '',
+    userRole: user.role || 'customer',
+    serviceType: 'cable',
+    network: provider || 'dstv',
+    planName: `${String(provider || 'Cable').toUpperCase()} Subscription`,
+    recipient: String(iucNumber || ''),
+    amount,
+    providerCost: 0,
+    profit: 0,
+    status: dispatchSuccess ? 'successful' : 'failed',
+    ...(dispatchSuccess ? {} : { failureReason }),
+    reference,
+    date: nowIso,
+    createdAt: nowIso,
+  };
+
+  await recordTransaction(tx);
+
+  if (!dispatchSuccess) {
+    return res.status(400).json({
+      success: false,
+      transaction: tx,
+      reference,
+      balance: currentBalance,
+      message: failureReason,
+      error: failureReason,
+    });
+  }
+
+  return res.status(200).json({
+    success: true,
+    transaction: tx,
+    reference,
+    balance: newBalance,
+    message: 'Cable TV subscription renewed successfully!',
+  });
+}
+
+export async function handleExamPurchase(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+
+  const body = req.body || {};
+  const { examPinId, quantity = 1, recipientPhone, pin } = body;
+
+  const user = await getUser(req);
+  if (!user) return res.status(401).json({ error: 'User not authenticated. Please log in.' });
+
+  const userPin = String(user.transactionPin || '1234').trim();
+  if (String(pin || '').trim() !== userPin) {
+    return res.status(400).json({ error: 'Incorrect 4-digit Transaction PIN' });
+  }
+
+  const unitPrice = String(examPinId || '').toLowerCase().includes('neco')
+    ? 1600
+    : String(examPinId || '').toLowerCase().includes('nabteb')
+    ? 1500
+    : 3800;
+  const totalCost = unitPrice * Math.max(1, Number(quantity));
+  const currentBalance = Number(user.walletBalance || 0);
+
+  if (currentBalance < totalCost) {
+    return res.status(400).json({
+      error: `Insufficient wallet balance (₦${currentBalance.toLocaleString()}). Required: ₦${totalCost.toLocaleString()}`,
+    });
+  }
+
+  const { apiKey, baseUrl } = await getVTUGatewayConfig();
+  if (!apiKey) {
+    return res.status(503).json({
+      success: false,
+      error: 'Service gateway is not configured on this deployment. Please contact support.',
+    });
+  }
+
+  const newBalance = currentBalance - totalCost;
+  await updateFirestoreUser(user.id, {
+    walletBalance: newBalance,
+    totalTransactionsCount: (user.totalTransactionsCount || 0) + 1,
+  });
+
+  const reference = `NDS-EXM-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
+  const nowIso = new Date().toISOString();
+  let dispatchSuccess = false;
+  let generatedPin = '';
+  let failureReason = 'Exam PIN order could not be completed. Wallet refunded.';
+
+  try {
+    const epinRes = await fetch(`${baseUrl.replace(/\/$/, '')}/epin/`, {
+      method: 'POST',
+      headers: {
+        Authorization: buildAuthHeader(apiKey),
+        'Content-Type': 'application/json',
+      },
+      body: JSON.stringify({
+        exam_name: body.planId || body.plan_id || examPinId || 'WAEC',
+        quantity: Number(quantity) || 1,
+        reference,
+      }),
+    });
+    const epinData = await epinRes.json().catch(() => ({}));
+    const rawStatus = String(epinData.Status || epinData.status || '').toLowerCase();
+    if (epinRes.ok && rawStatus !== 'failed' && rawStatus !== 'false') {
+      dispatchSuccess = true;
+      generatedPin = epinData.pin || epinData.pins || epinData.token || '';
+    } else {
+      failureReason = epinData.message || epinData.msg || failureReason;
+    }
+  } catch (err) {
+    console.warn('Exam dispatch error:', err);
+    failureReason = 'Network communication error. Your wallet balance has been refunded.';
+  }
+
+  if (!dispatchSuccess) {
+    await updateFirestoreUser(user.id, {
+      walletBalance: currentBalance,
+      totalTransactionsCount: user.totalTransactionsCount || 0,
+    });
+  }
+
+  const tx = {
+    id: reference,
+    userId: user.id,
+    userName: user.name || 'Customer',
+    userEmail: user.email || '',
+    userPhone: user.phone || recipientPhone || '',
+    userRole: user.role || 'customer',
+    serviceType: 'exam_pin',
+    network: String(examPinId || 'WAEC').toUpperCase(),
+    planName: `${quantity}x ${String(examPinId || 'WAEC').toUpperCase()} PIN`,
+    recipient: String(recipientPhone || user.phone || ''),
+    amount: totalCost,
+    providerCost: 0,
+    profit: 0,
+    token: generatedPin || undefined,
+    status: dispatchSuccess ? 'successful' : 'failed',
+    ...(dispatchSuccess ? {} : { failureReason }),
+    reference,
+    date: nowIso,
+    createdAt: nowIso,
+  };
+
+  await recordTransaction(tx);
+
+  if (!dispatchSuccess) {
+    return res.status(400).json({
+      success: false,
+      transaction: tx,
+      reference,
+      balance: currentBalance,
+      message: failureReason,
+      error: failureReason,
+    });
+  }
+
+  return res.status(200).json({
+    success: true,
+    transaction: tx,
+    reference,
+    balance: newBalance,
+    token: generatedPin,
+    message: 'Exam PIN generated successfully!',
+  });
+}
+
+export async function handleWalletFundInitiate(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  const { amount, gateway } = req.body || {};
+  const numAmount = Number(amount || 0);
+  if (!Number.isFinite(numAmount) || numAmount < 100) {
+    return res.status(400).json({ error: 'Minimum funding amount is ₦100' });
+  }
+  const reference = `NDS-FND-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
+  return res.status(200).json({
+    success: true,
+    reference,
+    amount: numAmount,
+    gateway: gateway || 'paystack',
+  });
+}
+
+export async function handleWalletFundVerify(req, res) {
+  if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
+  return res.status(400).json({
+    success: false,
+    error: 'Direct card funding requires gateway server keys. Please use your instant Virtual Bank Account or Manual Transfer.',
+  });
+}
+
+export async function handleSupportTickets(req, res) {
+  const userId = req.headers['x-user-id'];
+  if (!userId) return res.status(401).json({ error: 'Authentication required' });
+
+  const url = req.url || '';
+  if (req.method === 'GET') {
+    try {
+      const fRes = await fetch(`${FIRESTORE_BASE}/supportTickets?key=${FIRESTORE_KEY}&pageSize=50`);
+      let tickets = [];
+      if (fRes.ok) {
+        const data = await fRes.json();
+        tickets = (data.documents || [])
+          .map(unwrapFirestoreDoc)
+          .filter(t => t && t.userId === userId);
+      }
+      return res.status(200).json({ success: true, tickets });
+    } catch {
+      return res.status(200).json({ success: true, tickets: [] });
+    }
+  }
+
+  if (req.method === 'POST') {
+    const body = req.body || {};
+    const nowIso = new Date().toISOString();
+
+    if (url.includes('/reply')) {
+      const match = url.match(/tickets\/([^/]+)\/reply/);
+      const ticketId = match?.[1];
+      if (!ticketId || !body.message) {
+        return res.status(400).json({ error: 'Ticket ID and message are required' });
+      }
+      try {
+        const tRes = await fetch(`${FIRESTORE_BASE}/supportTickets/${encodeURIComponent(ticketId)}?key=${FIRESTORE_KEY}`);
+        if (!tRes.ok) return res.status(404).json({ error: 'Ticket not found' });
+        const ticket = unwrapFirestoreDoc(await tRes.json());
+        if (!ticket || ticket.userId !== userId) {
+          return res.status(403).json({ error: 'Unauthorized ticket access' });
+        }
+        const messages = Array.isArray(ticket.messages) ? [...ticket.messages] : [];
+        messages.push({
+          id: `msg_${Date.now()}`,
+          sender: 'user',
+          senderName: ticket.userName || 'Customer',
+          message: String(body.message),
+          timestamp: nowIso,
+        });
+        await fetch(`${FIRESTORE_BASE}/supportTickets/${encodeURIComponent(ticketId)}?key=${FIRESTORE_KEY}`, {
+          method: 'PATCH',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(wrapFirestoreDoc({ ...ticket, messages, updatedAt: nowIso })),
+        });
+        return res.status(200).json({ success: true, ticket: { ...ticket, messages, updatedAt: nowIso } });
+      } catch (err) {
+        return res.status(500).json({ error: err.message || 'Reply failed' });
+      }
+    }
+
+    const user = await getUser(req);
+    const ticketId = `tkt_${Date.now()}`;
+    const ticket = {
+      id: ticketId,
+      userId,
+      userName: user?.name || 'Customer',
+      userEmail: user?.email || '',
+      subject: String(body.subject || 'Support Request'),
+      category: String(body.category || 'General'),
+      priority: String(body.priority || 'medium'),
+      status: 'open',
+      messages: [
+        {
+          id: `msg_${Date.now()}`,
+          sender: 'user',
+          senderName: user?.name || 'Customer',
+          message: String(body.message || ''),
+          timestamp: nowIso,
+        },
+      ],
+      createdAt: nowIso,
+      updatedAt: nowIso,
+    };
+
+    try {
+      await fetch(`${FIRESTORE_BASE}/supportTickets/${encodeURIComponent(ticketId)}?key=${FIRESTORE_KEY}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify(wrapFirestoreDoc(ticket)),
+      });
+    } catch {}
+
+    return res.status(200).json({ success: true, ticket });
+  }
+
+  return res.status(405).json({ error: 'Method not allowed' });
 }

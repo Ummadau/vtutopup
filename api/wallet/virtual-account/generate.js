@@ -22,21 +22,18 @@ export default async function handler(req, res) {
       try { body = JSON.parse(body); } catch {}
     }
 
-    const userId = req.headers['x-user-id'] || body.userId || 'usr_ahmad_01';
+    const userId = req.headers['x-user-id'] || body.userId;
+    if (!userId) {
+      return res.status(401).json({ error: 'Authentication required to generate a virtual account' });
+    }
     const bank = String(body.bank || 'UNITYBILLS').toUpperCase();
     const idType = body.idType || 'nin';
     const idNumber = body.idNumber || '';
 
-    // 1. Fetch user from Firestore
-    let user = await findUserByIdentifier(userId);
+    // 1. Fetch authenticated user from Firestore
+    const user = await findUserByIdentifier(userId);
     if (!user) {
-      user = await findUserByIdentifier('ahmadnaim2877@gmail.com') || {
-        id: userId,
-        name: 'Valued Customer',
-        email: 'customer@vtutopup.ng',
-        phone: '08012345678',
-        virtualAccounts: [],
-      };
+      return res.status(404).json({ error: 'User account not found' });
     }
 
     const currentAccounts = Array.isArray(user.virtualAccounts) ? [...user.virtualAccounts] : [];
@@ -60,44 +57,47 @@ export default async function handler(req, res) {
     }
 
     // 2. Generate new account details
-    let bankName = 'Wema Bank / UnityBills';
+    let bankName = 'Wema Bank';
     let accountNumber = '';
-    let accountName = `UNITYBILLSNG/${(user.name || 'CUSTOMER').toUpperCase()}`;
+    let accountName = `NPAY/${(user.name || 'CUSTOMER').toUpperCase()}`;
 
     if (bank === 'PALMPAY') {
       bankName = 'PalmPay';
       const cleanPhone = (user.phone || '').replace(/\D/g, '').slice(-10);
       accountNumber = cleanPhone.length === 10 ? '8' + cleanPhone.slice(1) : `80${Math.floor(10000000 + Math.random() * 90000000)}`;
-      accountName = `NAEEM - ${(user.name || 'Customer')}`;
+      accountName = `NPAY - ${(user.name || 'Customer')}`;
     } else if (bank === 'SAFEHAVEN') {
       bankName = 'SafeHaven Bank';
       accountNumber = `60${Math.floor(10000000 + Math.random() * 90000000)}`;
-      accountName = `NAEEM - ${(user.name || 'Customer')}`;
+      accountName = `NPAY - ${(user.name || 'Customer')}`;
     } else if (bank === '9PSB') {
       bankName = '9PSB Bank';
       accountNumber = `52${Math.floor(10000000 + Math.random() * 90000000)}`;
-      accountName = `NAEEM - ${(user.name || 'Customer')}`;
+      accountName = `NPAY - ${(user.name || 'Customer')}`;
     } else if (bank === 'PROVIDUS') {
       bankName = 'Providus Bank';
       accountNumber = `10${Math.floor(10000000 + Math.random() * 90000000)}`;
-      accountName = `NAEEM - ${(user.name || 'Customer')}`;
+      accountName = `NPAY - ${(user.name || 'Customer')}`;
     } else {
-      // UnityBills / Wema
-      bankName = 'Wema Bank / UnityBills';
+      bankName = 'Wema Bank';
       accountNumber = `98${Math.floor(10000000 + Math.random() * 90000000)}`;
-      accountName = `UNITYBILLSNG/${(user.name || 'CUSTOMER').toUpperCase()}`;
+      accountName = `NPAY/${(user.name || 'CUSTOMER').toUpperCase()}`;
     }
 
-    // Try calling UnityBills API if bank is UnityBills/Wema
+    // Try calling upstream partner API if bank is Wema Direct
     if (bank === 'UNITYBILLS' || bank === 'WEMA') {
       try {
-        const cfgRes = await fetch(`${FIRESTORE_BASE}/systemSettings/unitybills_config?key=${FIRESTORE_KEY}`);
-        if (cfgRes.ok) {
-          const cfgData = await cfgRes.json();
-          const apiKey = cfgData.fields?.apiKey?.stringValue || '';
-          if (apiKey && apiKey.length > 10) {
-            const authHeader = apiKey.toLowerCase().startsWith('token') ? apiKey : `Token ${apiKey}`;
-            const ubRes = await fetch('https://unitybills.ng/virtual-account', {
+        let apiKey = process.env.UNITYBILLS_API_KEY || '';
+        if (!apiKey) {
+          const cfgRes = await fetch(`${FIRESTORE_BASE}/systemSettings/unitybills_config?key=${FIRESTORE_KEY}`);
+          if (cfgRes.ok) {
+            const cfgData = await cfgRes.json();
+            apiKey = cfgData.fields?.apiKey?.stringValue || '';
+          }
+        }
+        if (apiKey && apiKey.length > 10) {
+          const authHeader = apiKey.toLowerCase().startsWith('token') ? apiKey : `Token ${apiKey}`;
+          const ubRes = await fetch('https://unitybills.ng/virtual-account', {
               method: 'POST',
               headers: {
                 'Authorization': authHeader,
@@ -121,10 +121,9 @@ export default async function handler(req, res) {
                 }
               }
             }
-          }
         }
       } catch (ubErr) {
-        console.warn('UnityBills reservation note:', ubErr);
+        console.warn('Virtual account reservation note:', ubErr);
       }
     }
 
@@ -133,7 +132,7 @@ export default async function handler(req, res) {
       accountNumber,
       accountName,
       depositFee: 0,
-      provider: 'billstack',
+      provider: 'automated',
       createdAt: new Date().toISOString(),
     };
 

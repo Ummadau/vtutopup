@@ -93,7 +93,7 @@ export async function handleUnityBillsWebhookRequest(req, res) {
       ''
     ).trim();
 
-    const bankName = data.sourceBankName || data.bank_name || data.bankName || 'UnityBills Partner Bank';
+    const bankName = data.sourceBankName || data.bank_name || data.bankName || 'Partner Bank';
     const customerName = data.sourceAccountName || data.accountName || body.sourceAccountName || 'Valued Customer';
     const customerEmail = String(data.emailAddress || data.email || body.emailAddress || body.email || '').trim();
 
@@ -178,7 +178,7 @@ export async function handleUnityBillsWebhookRequest(req, res) {
                 recipient: { stringValue: `${bankName} (${accountNumber || '9819132449'})` },
                 amount: { integerValue: String(amount) },
                 status: { stringValue: 'successful' },
-                paymentMethod: { stringValue: `UnityBills (${bankName})` },
+                paymentMethod: { stringValue: `Bank Transfer (${bankName})` },
                 date: { stringValue: new Date().toISOString() },
               }
             })

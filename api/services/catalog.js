@@ -67,7 +67,7 @@ function loadCatalog() {
       { id: 'nabteb', examType: 'NABTEB', name: 'NABTEB Result Checker Pin', price: 1500, quantityAvailable: 150, isActive: true },
     ],
     settings: {
-      siteName: 'NAEEM DATA SUB',
+      siteName: 'NPay',
       supportEmail: 'naeemummadau@gmail.com',
       supportPhone: '+2348069417241',
       whatsappSupport: '+2348069417241',

@@ -8,12 +8,10 @@ import {
   deleteDoc,
   query,
   where,
-  orderBy,
   limit,
   onSnapshot,
   Unsubscribe,
-  runTransaction,
-  serverTimestamp
+  runTransaction
 } from 'firebase/firestore';
 import { firestoreDb, auth } from './firebase.ts';
 import { User, Transaction, TransactionStatus, ManualFundingRequest, ManualFundingConfig } from '../types/index.ts';
@@ -65,12 +63,29 @@ export function handleFirestoreError(error: unknown, operationType: OperationTyp
   throw new Error(JSON.stringify(errInfo));
 }
 
+function isAuthenticatedClient(): boolean {
+  return Boolean(auth.currentUser);
+}
+
+function isAdminClient(): boolean {
+  const email = auth.currentUser?.email?.toLowerCase() || '';
+  return email === 'naeemummadau@gmail.com' || email === 'ahmadnaim2877@gmail.com';
+}
+
+function canAccessUserDoc(userId: string): boolean {
+  if (!auth.currentUser || !userId) return false;
+  return isAdminClient() || auth.currentUser.uid === userId;
+}
+
 // ==================== USER CRUD OPERATIONS ====================
 
 /**
  * Retrieve user document by ID
  */
 export async function getUser(userId: string): Promise<User | null> {
+  if (!canAccessUserDoc(userId)) {
+    return null;
+  }
   const path = `users/${userId}`;
   try {
     const docRef = doc(firestoreDb, 'users', userId);
@@ -86,6 +101,9 @@ export async function getUser(userId: string): Promise<User | null> {
  * Create or overwrite user document in Firestore
  */
 export async function setUser(user: User): Promise<void> {
+  if (!canAccessUserDoc(user.id)) {
+    return;
+  }
   const path = `users/${user.id}`;
   try {
     const docRef = doc(firestoreDb, 'users', user.id);
@@ -102,11 +120,24 @@ export async function setUser(user: User): Promise<void> {
  * Update partial user fields in Firestore
  */
 export async function updateUser(userId: string, data: Partial<User>): Promise<void> {
+  if (!canAccessUserDoc(userId)) {
+    return;
+  }
+  const safeData: Record<string, any> = { ...data };
+  if (!isAdminClient()) {
+    delete safeData.role;
+    delete safeData.status;
+    delete safeData.isVerified;
+    delete safeData.id;
+    delete safeData.email;
+    delete safeData.referralEarnings;
+  }
+
   const path = `users/${userId}`;
   try {
     const docRef = doc(firestoreDb, 'users', userId);
     await setDoc(docRef, {
-      ...data,
+      ...safeData,
       updatedAt: new Date().toISOString(),
     }, { merge: true });
   } catch (error) {
@@ -118,6 +149,9 @@ export async function updateUser(userId: string, data: Partial<User>): Promise<v
  * Delete user document in Firestore
  */
 export async function deleteUser(userId: string): Promise<void> {
+  if (!isAdminClient()) {
+    return;
+  }
   const path = `users/${userId}`;
   try {
     const docRef = doc(firestoreDb, 'users', userId);
@@ -141,6 +175,9 @@ export async function getWalletBalance(userId: string): Promise<number> {
  * Update wallet balance directly in Firestore
  */
 export async function updateWalletBalance(userId: string, newBalance: number): Promise<void> {
+  if (!canAccessUserDoc(userId)) {
+    return;
+  }
   const path = `users/${userId}`;
   try {
     const docRef = doc(firestoreDb, 'users', userId);
@@ -157,6 +194,9 @@ export async function updateWalletBalance(userId: string, newBalance: number): P
  * Credit user wallet balance atomically in Firestore using runTransaction
  */
 export async function creditWalletBalance(userId: string, amount: number): Promise<number> {
+  if (!canAccessUserDoc(userId)) {
+    return 0;
+  }
   const path = `users/${userId}`;
   try {
     const userRef = doc(firestoreDb, 'users', userId);
@@ -187,6 +227,9 @@ export async function creditWalletBalance(userId: string, amount: number): Promi
  * Debit user wallet balance atomically in Firestore using runTransaction
  */
 export async function debitWalletBalance(userId: string, amount: number): Promise<number> {
+  if (!canAccessUserDoc(userId)) {
+    return 0;
+  }
   const path = `users/${userId}`;
   try {
     const userRef = doc(firestoreDb, 'users', userId);
@@ -224,6 +267,9 @@ export async function debitWalletBalance(userId: string, amount: number): Promis
  * Create a transaction document in Firestore
  */
 export async function createTransaction(tx: Transaction): Promise<Transaction> {
+  if (!isAuthenticatedClient() || (!isAdminClient() && tx.userId !== auth.currentUser?.uid)) {
+    return tx;
+  }
   const path = `transactions/${tx.id}`;
   try {
     const docRef = doc(firestoreDb, 'transactions', tx.id);
@@ -241,6 +287,9 @@ export async function createTransaction(tx: Transaction): Promise<Transaction> {
  * Get a single transaction document by ID
  */
 export async function getTransaction(txId: string): Promise<Transaction | null> {
+  if (!isAuthenticatedClient()) {
+    return null;
+  }
   const path = `transactions/${txId}`;
   try {
     const docRef = doc(firestoreDb, 'transactions', txId);
@@ -256,6 +305,9 @@ export async function getTransaction(txId: string): Promise<Transaction | null> 
  * Get recent transactions for a specific user
  */
 export async function getUserTransactions(userId: string, limitCount = 50): Promise<Transaction[]> {
+  if (!canAccessUserDoc(userId)) {
+    return [];
+  }
   const path = 'transactions';
   try {
     const q = query(
@@ -279,6 +331,9 @@ export async function updateTransactionStatus(
   status: TransactionStatus,
   failureReason?: string
 ): Promise<void> {
+  if (!isAdminClient()) {
+    return;
+  }
   const path = `transactions/${txId}`;
   try {
     const docRef = doc(firestoreDb, 'transactions', txId);
@@ -302,7 +357,9 @@ export function subscribeToUser(
   onUpdate: (user: User | null) => void,
   onError?: (err: Error) => void
 ): Unsubscribe {
-  const path = `users/${userId}`;
+  if (!canAccessUserDoc(userId)) {
+    return () => {};
+  }
   const docRef = doc(firestoreDb, 'users', userId);
 
   return onSnapshot(
@@ -329,6 +386,9 @@ export function subscribeToTransactions(
   onUpdate: (transactions: Transaction[]) => void,
   onError?: (err: Error) => void
 ): Unsubscribe {
+  if (!canAccessUserDoc(userId)) {
+    return () => {};
+  }
   const path = 'transactions';
   const q = query(
     collection(firestoreDb, path),
@@ -357,6 +417,9 @@ export function subscribeToAllTransactions(
   onUpdate: (transactions: Transaction[]) => void,
   onError?: (err: Error) => void
 ): Unsubscribe {
+  if (!isAdminClient()) {
+    return () => {};
+  }
   const path = 'transactions';
   const colRef = collection(firestoreDb, path);
 
@@ -382,6 +445,9 @@ export const syncUserToFirestore = setUser;
  * Bootstrap/Seed Firestore if documents do not exist yet
  */
 export async function initializeFirestoreSeeds(defaultUser: User, defaultTxs: Transaction[]): Promise<void> {
+  if (!canAccessUserDoc(defaultUser.id)) {
+    return;
+  }
   try {
     const existingUser = await getUser(defaultUser.id);
     if (!existingUser) {
@@ -391,9 +457,11 @@ export async function initializeFirestoreSeeds(defaultUser: User, defaultTxs: Tr
 
     // Seed default transactions if not yet present
     for (const tx of defaultTxs) {
-      const existingTx = await getTransaction(tx.id);
-      if (!existingTx) {
-        await createTransaction(tx);
+      if (isAdminClient() || tx.userId === auth.currentUser?.uid) {
+        const existingTx = await getTransaction(tx.id);
+        if (!existingTx) {
+          await createTransaction(tx);
+        }
       }
     }
   } catch (err) {
@@ -404,6 +472,9 @@ export async function initializeFirestoreSeeds(defaultUser: User, defaultTxs: Tr
 // ==================== MANUAL FUNDING FIRESTORE OPERATIONS ====================
 
 export async function saveManualFundingRequestInFirestore(req: ManualFundingRequest): Promise<void> {
+  if (!isAuthenticatedClient() || (!isAdminClient() && req.userId !== auth.currentUser?.uid)) {
+    return;
+  }
   const path = `manual_funding_requests/${req.id}`;
   try {
     const docRef = doc(firestoreDb, 'manual_funding_requests', req.id);
@@ -417,10 +488,15 @@ export async function saveManualFundingRequestInFirestore(req: ManualFundingRequ
 }
 
 export async function getManualFundingRequestsFromFirestore(): Promise<ManualFundingRequest[]> {
+  if (!isAuthenticatedClient()) {
+    return [];
+  }
   const path = 'manual_funding_requests';
   try {
-    const colRef = collection(firestoreDb, path);
-    const snap = await getDocs(colRef);
+    const q = isAdminClient()
+      ? collection(firestoreDb, path)
+      : query(collection(firestoreDb, path), where('userId', '==', auth.currentUser!.uid));
+    const snap = await getDocs(q);
     const list = snap.docs.map(d => d.data() as ManualFundingRequest);
     return list.sort((a, b) => new Date(b.createdAt).getTime() - new Date(a.createdAt).getTime());
   } catch (error) {
@@ -433,6 +509,9 @@ export async function updateManualFundingRequestStatusInFirestore(
   status: 'approved' | 'rejected',
   rejectionReason?: string
 ): Promise<void> {
+  if (!isAdminClient()) {
+    return;
+  }
   const path = `manual_funding_requests/${requestId}`;
   try {
     const docRef = doc(firestoreDb, 'manual_funding_requests', requestId);
@@ -447,6 +526,9 @@ export async function updateManualFundingRequestStatusInFirestore(
 }
 
 export async function getManualFundingConfigFromFirestore(): Promise<ManualFundingConfig | null> {
+  if (!isAuthenticatedClient()) {
+    return null;
+  }
   const path = 'settings/manual_funding';
   try {
     const docRef = doc(firestoreDb, 'settings', 'manual_funding');
@@ -459,6 +541,9 @@ export async function getManualFundingConfigFromFirestore(): Promise<ManualFundi
 }
 
 export async function saveManualFundingConfigToFirestore(config: ManualFundingConfig): Promise<void> {
+  if (!isAdminClient()) {
+    return;
+  }
   const path = 'settings/manual_funding';
   try {
     const docRef = doc(firestoreDb, 'settings', 'manual_funding');

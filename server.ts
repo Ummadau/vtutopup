@@ -1,7 +1,9 @@
 import express, { Request, Response } from 'express';
 import path from 'path';
+import crypto from 'crypto';
 import { doc, getDoc, setDoc, deleteDoc, collection, getDocs, query, where } from 'firebase/firestore';
-import { firestoreDb } from './src/lib/firebase.ts';
+import { firestoreDb, auth } from './src/lib/firebase.ts';
+import firebaseAppletConfig from './firebase-applet-config.json' with { type: 'json' };
 import { db } from './server/db.ts';
 import {
   detectNigerianNetwork,
@@ -85,12 +87,14 @@ async function logWebhookToFirestore(req: Request) {
     timestamp: new Date().toISOString(),
   };
 
-  try {
-    const docRef = doc(firestoreDb, 'webhook_logs', logId);
-    await setDoc(docRef, logPayload);
-    console.log(`[Webhook Diagnostic Log] Logged ${req.method} ${req.path} to Firestore 'webhook_logs' (${logId})`);
-  } catch (err: any) {
-    console.warn('[Webhook Log Firestore Error]:', err?.message || err);
+  if (auth.currentUser) {
+    try {
+      const docRef = doc(firestoreDb, 'webhook_logs', logId);
+      await setDoc(docRef, logPayload);
+      console.log(`[Webhook Diagnostic Log] Logged ${req.method} ${req.path} to Firestore 'webhook_logs' (${logId})`);
+    } catch (err: any) {
+      console.warn('[Webhook Log Firestore Error]:', err?.message || err);
+    }
   }
 
   return logPayload;
@@ -170,7 +174,7 @@ const handleEarlyWebhookRequest = async (req: Request, res: Response) => {
     ''
   ).trim();
 
-  const bankName = data.sourceBankName || data.bank_name || data.bankName || 'UnityBills Partner Bank';
+  const bankName = data.sourceBankName || data.bank_name || data.bankName || 'Partner Bank';
   const customerEmail = String(data.emailAddress || data.email || body.emailAddress || body.email || '').trim();
   const customerPhone = String(data.mobileNumber || data.phoneNumber || data.phone || body.mobileNumber || '').trim();
 
@@ -243,7 +247,7 @@ const handleEarlyWebhookRequest = async (req: Request, res: Response) => {
         amount,
         balanceBefore,
         balanceAfter,
-        description: `Virtual Account Deposit via ${bankName} (${accountNumber || 'UnityBills'})`,
+        description: `Virtual Account Deposit via ${bankName} (${accountNumber || 'Automated Account'})`,
         timestamp: new Date().toISOString(),
       });
 
@@ -259,13 +263,13 @@ const handleEarlyWebhookRequest = async (req: Request, res: Response) => {
         userPhone: matchedUser.phone,
         userRole: matchedUser.role,
         serviceType: 'wallet_fund',
-        recipient: `${bankName} (${accountNumber || 'UnityBills Account'})`,
+        recipient: `${bankName} (${accountNumber || 'Virtual Account'})`,
         amount,
         providerCost: 0,
         profit: 0,
         status: 'successful',
         date: new Date().toISOString(),
-        paymentMethod: `UnityBills (${bankName})`,
+        paymentMethod: `Bank Transfer (${bankName})`,
       };
       db.transactions.set(txId, tx);
       await recordTransactionInFirestore(tx).catch(() => {});
@@ -273,7 +277,7 @@ const handleEarlyWebhookRequest = async (req: Request, res: Response) => {
       db.addNotification({
         userId: matchedUser.id,
         title: 'Virtual Account Deposit Credited!',
-        message: `₦${amount.toLocaleString()} received into your ${bankName} account. Wallet credited instantly via UnityBills!`,
+        message: `₦${amount.toLocaleString()} received into your ${bankName} account. Wallet credited instantly!`,
         type: 'success',
       });
 
@@ -500,11 +504,58 @@ app.post('/api/user/biometrics/verify', (req: Request, res: Response) => {
   res.json({ success: true, status: true, message: 'Biometric verification successful' });
 });
 
+// ==================== AUTHENTICATION HELPERS ====================
+function hashPassword(password: string): string {
+  const salt = crypto.randomBytes(16).toString('hex');
+  const derived = crypto.scryptSync(password, salt, 64).toString('hex');
+  return `${salt}:${derived}`;
+}
+
+function verifyPassword(password: string, storedHash: string): boolean {
+  const parts = storedHash.split(':');
+  if (parts.length !== 2) return false;
+  const [salt, keyHex] = parts;
+  const keyBuf = Buffer.from(keyHex, 'hex');
+  const derivedBuf = crypto.scryptSync(password, salt, 64);
+  if (keyBuf.length !== derivedBuf.length) return false;
+  return crypto.timingSafeEqual(keyBuf, derivedBuf);
+}
+
+async function verifyFirebaseIdToken(idToken: string): Promise<{ email?: string; uid?: string } | null> {
+  if (!idToken || !firebaseAppletConfig?.apiKey) return null;
+  try {
+    const res = await fetch(
+      `https://identitytoolkit.googleapis.com/v1/accounts:lookup?key=${firebaseAppletConfig.apiKey}`,
+      {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ idToken }),
+      }
+    );
+    if (!res.ok) return null;
+    const data = await res.json();
+    const fbUser = data?.users?.[0];
+    if (!fbUser?.email) return null;
+    return { email: String(fbUser.email).toLowerCase(), uid: fbUser.localId };
+  } catch {
+    return null;
+  }
+}
+
+function sanitizeUser(u: any): User {
+  const copy = { ...u };
+  delete copy.passwordHash;
+  return copy as User;
+}
+
 // ==================== AUTHENTICATION ROUTES ====================
 app.post('/api/auth/register', (req: Request, res: Response) => {
   const { name, phone, email, password, referralCode } = req.body;
   if (!name || !phone || !email || !password) {
     return res.status(400).json({ error: 'Please provide all required fields' });
+  }
+  if (String(password).length < 6) {
+    return res.status(400).json({ error: 'Password must be at least 6 characters' });
   }
 
   const cleanEmail = String(email).trim().toLowerCase();
@@ -520,8 +571,9 @@ app.post('/api/auth/register', (req: Request, res: Response) => {
 
   const newId = `usr_${Date.now()}`;
   const generatedRefCode = name.replace(/\s+/g, '').slice(0, 4).toUpperCase() + Math.floor(100 + Math.random() * 900);
+  const passwordHash = hashPassword(String(password));
 
-  const newUser: User = {
+  const newUser: User & { passwordHash?: string } = {
     id: newId,
     name: String(name).trim(),
     email: cleanEmail,
@@ -536,6 +588,7 @@ app.post('/api/auth/register', (req: Request, res: Response) => {
     referralEarnings: 0,
     totalTransactionsCount: 0,
     transactionPin: '1234',
+    passwordHash,
     createdAt: new Date().toISOString(),
   };
 
@@ -547,26 +600,38 @@ app.post('/api/auth/register', (req: Request, res: Response) => {
 
   db.addNotification({
     userId: newUser.id,
-    title: 'Welcome to NAEEM DATA SUB!',
+    title: 'Welcome to NPay!',
     message: 'Your account has been created. Fund your wallet to start enjoying fast & affordable digital services.',
     type: 'success',
   });
 
-  res.json({ success: true, user: newUser });
+  res.json({ success: true, user: sanitizeUser(newUser) });
 });
 
 app.post('/api/auth/login', async (req: Request, res: Response) => {
-  const { identifier, password } = req.body;
-  if (!identifier) {
+  const { identifier, password, idToken } = req.body;
+  if (!identifier && !idToken) {
     return res.status(400).json({ error: 'Email or phone number is required' });
   }
 
-  const clean = String(identifier).trim().toLowerCase();
+  let verifiedEmail: string | null = null;
+  if (idToken) {
+    const fbTokenUser = await verifyFirebaseIdToken(String(idToken));
+    if (!fbTokenUser?.email) {
+      return res.status(401).json({ error: 'Invalid or expired Google authentication token' });
+    }
+    verifiedEmail = fbTokenUser.email;
+  }
+
+  const clean = verifiedEmail || String(identifier).trim().toLowerCase();
   const cleanPhone = normalizePhoneNumber(clean);
+  const adminPassword = process.env.ADMIN_DEFAULT_PASSWORD || 'naeem1234';
 
   // Super Admin single unified login check
   if (clean === 'naeemummadau@gmail.com' || cleanPhone === '08000000001') {
-    if (password === 'naeem1234' || !password || password === 'google_oauth_authenticated') {
+    const isPasswordValid = Boolean(password && String(password) === adminPassword);
+    const isGoogleVerified = Boolean(verifiedEmail && verifiedEmail === 'naeemummadau@gmail.com');
+    if (isPasswordValid || isGoogleVerified) {
       let admin = db.users.get('usr_admin_01');
       if (!admin) {
         admin = {
@@ -587,20 +652,24 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
         };
         db.users.set(admin.id, admin);
       }
-      return res.json({ success: true, user: admin });
+      return res.json({ success: true, user: sanitizeUser(admin) });
     } else {
       return res.status(401).json({ error: 'Incorrect administrator password' });
     }
   }
 
-  let user = Array.from(db.users.values()).find(u => {
+  if (!verifiedEmail && (!password || String(password).trim().length === 0)) {
+    return res.status(400).json({ error: 'Password is required' });
+  }
+
+  let user: any = Array.from(db.users.values()).find(u => {
     const userEmail = (u.email || '').toLowerCase();
     const userPhone = normalizePhoneNumber(u.phone || '');
     return (userEmail && userEmail === clean) || (userPhone && userPhone === cleanPhone);
   });
 
-  // Fallback: Query Firestore if user not loaded in memory yet
-  if (!user) {
+  // Fallback: Query Firestore only if Firebase Auth session is active
+  if (!user && auth.currentUser) {
     try {
       const usersRef = collection(firestoreDb, 'users');
       let snap = await getDocs(query(usersRef, where('email', '==', clean))).catch(() => null);
@@ -629,141 +698,33 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
     return res.status(403).json({ error: 'This account has been suspended. Please contact customer support.' });
   }
 
-  if (!user.transactionPin) {
-    user.transactionPin = '1234';
-  }
-
-  res.json({ success: true, user });
-});
-
-app.post('/api/auth/otp-login', async (req: Request, res: Response) => {
-  const { identifier, otp } = req.body;
-  const clean = String(identifier || '').trim().toLowerCase();
-  const cleanPhone = normalizePhoneNumber(clean);
-
-  let user = Array.from(db.users.values()).find(u => {
-    const userEmail = (u.email || '').toLowerCase();
-    const userPhone = normalizePhoneNumber(u.phone || '');
-    return (userEmail && userEmail === clean) || (userPhone && userPhone === cleanPhone);
-  });
-
-  if (!user) {
-    try {
-      const usersRef = collection(firestoreDb, 'users');
-      let snap = await getDocs(query(usersRef, where('email', '==', clean))).catch(() => null);
-      if (!snap || snap.empty) {
-        snap = await getDocs(query(usersRef, where('phone', '==', cleanPhone))).catch(() => null);
-      }
-      if (snap && !snap.empty) {
-        const docData = snap.docs[0].data() as User;
-        if (docData && docData.id) {
-          user = {
-            ...docData,
-            transactionPin: docData.transactionPin || '1234',
-          };
-          db.users.set(user.id, user);
-        }
-      }
-    } catch (fsErr) {
-      console.warn('Firestore OTP login lookup note:', fsErr);
+  // Verify stored password hash if not authenticated via verified Firebase ID token
+  if (!verifiedEmail && user.passwordHash) {
+    if (!verifyPassword(String(password), user.passwordHash)) {
+      return res.status(401).json({ error: 'Incorrect password. Please verify your password.' });
     }
-  }
-
-  if (!user) {
-    return res.status(404).json({ error: 'No account found with this phone number or email' });
-  }
-  if (!otp || String(otp).trim().length < 4) {
-    return res.status(400).json({ error: 'Please enter a valid OTP code' });
   }
 
   if (!user.transactionPin) {
     user.transactionPin = '1234';
   }
 
-  res.json({ success: true, user });
+  res.json({ success: true, user: sanitizeUser(user) });
 });
 
-// Quick 4-Digit PIN Unlock Login Endpoint
-app.post('/api/auth/pin-login', async (req: Request, res: Response) => {
-  const { identifier, pin } = req.body;
-  if (!identifier) {
-    return res.status(400).json({ error: 'Email or phone number is required' });
-  }
-
-  const clean = String(identifier).trim().toLowerCase();
-  const cleanPhone = normalizePhoneNumber(clean);
-
-  // Check Super Admin
-  if (clean === 'naeemummadau@gmail.com' || cleanPhone === '08000000001') {
-    let admin = db.users.get('usr_admin_01');
-    if (!admin) {
-      admin = {
-        id: 'usr_admin_01',
-        name: 'Naeem Ummadau',
-        email: 'naeemummadau@gmail.com',
-        phone: '08000000001',
-        role: 'admin',
-        status: 'active',
-        isVerified: true,
-        referralCode: 'ADMIN01',
-        walletBalance: 250000,
-        totalSavings: 0,
-        referralEarnings: 0,
-        totalTransactionsCount: 520,
-        transactionPin: '1234',
-        createdAt: '2025-12-01T08:00:00Z',
-      };
-      db.users.set(admin.id, admin);
-    }
-    const pinCheck = validateTransactionPin(admin, pin);
-    if (!pinCheck.valid) {
-      return res.status(400).json({ error: pinCheck.error || 'Incorrect 4-digit PIN' });
-    }
-    return res.json({ success: true, user: admin });
-  }
-
-  let user = Array.from(db.users.values()).find(u => {
-    const userEmail = (u.email || '').toLowerCase();
-    const userPhone = normalizePhoneNumber(u.phone || '');
-    return (userEmail && userEmail === clean) || (userPhone && userPhone === cleanPhone);
+app.post('/api/auth/otp-login', (_req: Request, res: Response) => {
+  return res.status(410).json({
+    success: false,
+    error: 'Unverified OTP login has been disabled for account security. Please sign in with your password or Google account.',
   });
+});
 
-  if (!user) {
-    try {
-      const usersRef = collection(firestoreDb, 'users');
-      let snap = await getDocs(query(usersRef, where('email', '==', clean))).catch(() => null);
-      if (!snap || snap.empty) {
-        snap = await getDocs(query(usersRef, where('phone', '==', cleanPhone))).catch(() => null);
-      }
-      if (snap && !snap.empty) {
-        const docData = snap.docs[0].data() as User;
-        if (docData && docData.id) {
-          user = {
-            ...docData,
-            transactionPin: docData.transactionPin || '1234',
-          };
-          db.users.set(user.id, user);
-        }
-      }
-    } catch (fsErr) {
-      console.warn('Firestore PIN login lookup note:', fsErr);
-    }
-  }
-
-  if (!user) {
-    return res.status(404).json({ error: 'No account found. Please sign in with password.' });
-  }
-
-  if (user.status === 'suspended') {
-    return res.status(403).json({ error: 'This account has been suspended. Please contact customer support.' });
-  }
-
-  const pinCheck = validateTransactionPin(user, pin);
-  if (!pinCheck.valid) {
-    return res.status(400).json({ error: pinCheck.error || 'Incorrect 4-digit PIN' });
-  }
-
-  res.json({ success: true, user });
+// PIN login disabled for security — enforce password or Google authentication
+app.post('/api/auth/pin-login', (_req: Request, res: Response) => {
+  return res.status(410).json({
+    success: false,
+    error: 'PIN login has been disabled for account security. Please sign in with your password or Google account.',
+  });
 });
 
 app.get('/api/auth/me', (req: Request, res: Response) => {
@@ -816,6 +777,10 @@ app.get('/api/user/referrals', async (req: Request, res: Response) => {
 });
 
 app.post('/api/auth/switch-user', (req: Request, res: Response) => {
+  const actor = getAuthenticatedUser(req);
+  if (!actor || actor.role !== 'admin') {
+    return res.status(403).json({ error: 'Administrator privileges required to switch accounts.' });
+  }
   const { role } = req.body;
   let target: User | undefined;
 
@@ -831,7 +796,7 @@ app.post('/api/auth/switch-user', (req: Request, res: Response) => {
     target = Array.from(db.users.values()).find(u => u.role === role) || db.users.get('usr_ahmad_01')!;
   }
 
-  res.json({ success: true, user: target });
+  res.json({ success: true, user: sanitizeUser(target) });
 });
 
 app.post('/api/auth/set-pin', (req: Request, res: Response) => {
@@ -859,7 +824,7 @@ app.post('/api/auth/set-pin', (req: Request, res: Response) => {
 function checkAndTriggerLowBalanceAlert(user: User) {
   if (user.walletBalance < 1000) {
     const alertTitle = '⚠️ Low Wallet Balance Alert';
-    const alertMessage = `Your NAEEM DATA SUB wallet balance is low (₦${user.walletBalance.toLocaleString()}). Fund your wallet via your dedicated BillStack account to avoid service interruption.`;
+    const alertMessage = `Your NPay wallet balance is low (₦${user.walletBalance.toLocaleString()}). Fund your wallet via your dedicated virtual account to avoid service interruption.`;
 
     const userNotifs = Array.from(db.notifications.values()).filter(
       n => n.userId === user.id && n.title.includes('Low Wallet Balance Alert')
@@ -1052,7 +1017,7 @@ app.post('/api/wallet/simulate-transfer', (req: Request, res: Response) => {
     user.id,
     numAmount,
     reference,
-    `Direct Bank Transfer Credit via ${bankName || '9PSB Bank (BillStack)'}`
+    `Direct Bank Transfer Credit via ${bankName || '9PSB Bank'}`
   );
 
   const txId = `tx_${Date.now()}`;
@@ -1065,7 +1030,7 @@ app.post('/api/wallet/simulate-transfer', (req: Request, res: Response) => {
     userPhone: user.phone,
     userRole: user.role,
     serviceType: 'wallet_fund',
-    recipient: `Virtual Transfer (${bankName || '9PSB Bank (BillStack)'})`,
+    recipient: `Virtual Transfer (${bankName || '9PSB Bank'})`,
     amount: numAmount,
     providerCost: 0,
     profit: 0,
@@ -1174,7 +1139,7 @@ app.post('/api/webhooks/billstack', (req: Request, res: Response) => {
   const accountInfo = eventData.account || {};
   const payerInfo = eventData.payer || {};
   const accountNumber = accountInfo.account_number;
-  const bankName = accountInfo.bank_name || 'BillStack Virtual Account';
+  const bankName = accountInfo.bank_name || 'Automated Virtual Account';
   const customerEmail = eventData.meta?.email || body.email;
 
   // Validate critical fields
@@ -1225,7 +1190,7 @@ app.post('/api/webhooks/billstack', (req: Request, res: Response) => {
     try {
       const payerName = [payerInfo.first_name, payerInfo.last_name].filter(Boolean).join(' ');
       const txRef = interbankRef || reference;
-      const desc = `BillStack deposit: ₦${amount.toLocaleString()} received via ${bankName}${accountNumber ? ` (${accountNumber})` : ''}${payerName ? ` from ${payerName}` : ''}`;
+      const desc = `Virtual account deposit: ₦${amount.toLocaleString()} received via ${bankName}${accountNumber ? ` (${accountNumber})` : ''}${payerName ? ` from ${payerName}` : ''}`;
 
       db.creditWallet(matchedUser.id, amount, txRef, desc);
 
@@ -1246,7 +1211,7 @@ app.post('/api/webhooks/billstack', (req: Request, res: Response) => {
         profit: 0,
         status: 'successful',
         date: eventData.created_at || new Date().toISOString(),
-        paymentMethod: `BillStack (${bankName})`,
+        paymentMethod: `Bank Transfer (${bankName})`,
       };
       db.transactions.set(txId, tx);
 
@@ -1302,7 +1267,7 @@ const handleUnityBillsWebhook = (req: Request, res: Response) => {
     ''
   ).trim();
 
-  const bankName = data.bank_name || data.bankName || 'UnityBills Partner Bank';
+  const bankName = data.bank_name || data.bankName || 'Partner Bank';
   const customerEmail = String(data.emailAddress || data.email || body.emailAddress || body.email || '').trim();
   const customerPhone = String(data.mobileNumber || data.phoneNumber || data.phone || body.mobileNumber || '').trim();
 
@@ -1372,7 +1337,7 @@ const handleUnityBillsWebhook = (req: Request, res: Response) => {
         amount,
         balanceBefore,
         balanceAfter,
-        description: `Virtual Account Deposit via ${bankName} (${accountNumber || 'UnityBills'})`,
+        description: `Virtual Account Deposit via ${bankName} (${accountNumber || 'Automated Account'})`,
         timestamp: new Date().toISOString(),
       });
 
@@ -1388,20 +1353,20 @@ const handleUnityBillsWebhook = (req: Request, res: Response) => {
         userPhone: matchedUser.phone,
         userRole: matchedUser.role,
         serviceType: 'wallet_fund',
-        recipient: `${bankName} (${accountNumber || 'UnityBills Account'})`,
+        recipient: `${bankName} (${accountNumber || 'Virtual Account'})`,
         amount,
         providerCost: 0,
         profit: 0,
         status: 'successful',
         date: new Date().toISOString(),
-        paymentMethod: `UnityBills (${bankName})`,
+        paymentMethod: `Bank Transfer (${bankName})`,
       };
       db.transactions.set(txId, tx);
 
       db.addNotification({
         userId: matchedUser.id,
         title: 'Virtual Account Deposit Credited!',
-        message: `₦${amount.toLocaleString()} received into your ${bankName} account. Wallet credited instantly via UnityBills!`,
+        message: `₦${amount.toLocaleString()} received into your ${bankName} account. Wallet credited instantly!`,
         type: 'success',
       });
 
@@ -1499,7 +1464,7 @@ app.post('/api/admin/billstack/test-webhook', async (req: Request, res: Response
       targetUser.id,
       amount,
       txRef,
-      `BillStack test deposit via ${targetAcc.bankName} (${targetAcc.accountNumber})`
+      `Virtual account test deposit via ${targetAcc.bankName} (${targetAcc.accountNumber})`
     );
 
     const txId = `tx_${Date.now()}`;
@@ -1519,14 +1484,14 @@ app.post('/api/admin/billstack/test-webhook', async (req: Request, res: Response
       profit: 0,
       status: 'successful',
       date: new Date().toISOString(),
-      paymentMethod: `BillStack (${targetAcc.bankName})`,
+      paymentMethod: `Bank Transfer (${targetAcc.bankName})`,
     };
     db.transactions.set(txId, tx);
 
     db.addNotification({
       userId: targetUser.id,
-      title: 'BillStack Webhook Test Deposit Credited',
-      message: `₦${amount.toLocaleString()} received via ${targetAcc.bankName} webhook simulation. Wallet balance updated!`,
+      title: 'Virtual Account Test Deposit Credited',
+      message: `₦${amount.toLocaleString()} received via ${targetAcc.bankName} simulation. Wallet balance updated!`,
       type: 'success',
     });
 
@@ -1551,7 +1516,7 @@ app.post('/api/admin/billstack/test-webhook', async (req: Request, res: Response
 let manualFundingConfig: ManualFundingConfig = {
   bankName: 'Moniepoint Microfinance Bank',
   accountNumber: '8123456789',
-  accountName: 'NAEEM DATA SUB OFFICIAL',
+  accountName: 'NPAY OFFICIAL',
   supportWhatsapp: '+2348012345678',
   instructions: 'Transfer to the admin bank account above, then submit your payment reference for instant admin verification.',
 };
@@ -2771,7 +2736,7 @@ app.post('/api/admin/users/create', async (req: Request, res: Response) => {
   db.addNotification({
     userId: newUser.id,
     title: 'Account Created by Admin',
-    message: `Welcome to NAEEM DATA SUB! Your account has been registered by Super Admin as ${newUser.role.toUpperCase()}.`,
+    message: `Welcome to NPay! Your account has been registered by Super Admin as ${newUser.role.toUpperCase()}.`,
     type: 'success',
   });
 
@@ -3339,6 +3304,13 @@ app.post('/api/admin/unitybills/ping', async (req: Request, res: Response) => {
 
 // Admin: Fetch Webhook Diagnostic Logs from Firestore collection 'webhook_logs'
 app.get(['/api/admin/webhook-logs', '/api/admin/webhook-logs/'], async (req: Request, res: Response) => {
+  const admin = getAuthenticatedUser(req);
+  if (admin.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
+
+  if (!auth.currentUser) {
+    return res.status(200).json({ success: true, logs: [] });
+  }
+
   try {
     const logsCol = collection(firestoreDb, 'webhook_logs');
     const snap = await getDocs(logsCol);
@@ -3396,7 +3368,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 NAEEM DATA SUB Server running on port ${PORT}`);
+    console.log(`🚀 NPay Server running on port ${PORT}`);
   });
 }
 

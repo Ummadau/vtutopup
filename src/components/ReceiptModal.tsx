@@ -1,5 +1,6 @@
-import React, { useState } from 'react';
-import { CheckCircle2, Clock, XCircle, RefreshCw, Copy, Check, Printer, Share2, AlertTriangle, ShieldCheck, Download } from 'lucide-react';
+import React, { useState, useEffect } from 'react';
+import { motion, AnimatePresence } from 'framer-motion';
+import { CheckCircle2, Clock, XCircle, RefreshCw, Copy, Check, Printer, Share2, AlertTriangle, ShieldCheck } from 'lucide-react';
 import { Transaction } from '../types/index.ts';
 import { Logo } from './Logo.tsx';
 import { parseTransactionFailureReason } from '../lib/transactionStatus.ts';
@@ -23,7 +24,14 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
   const [isSharing, setIsSharing] = useState(false);
   const [shareSuccess, setShareSuccess] = useState(false);
 
-  if (!isOpen || !transaction) return null;
+  useEffect(() => {
+    if (!isOpen) return;
+    const handleKeyDown = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') onClose();
+    };
+    window.addEventListener('keydown', handleKeyDown);
+    return () => window.removeEventListener('keydown', handleKeyDown);
+  }, [isOpen, onClose]);
 
   const handleCopy = (text: string, type: 'token' | 'ref') => {
     hapticLight();
@@ -94,17 +102,17 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({
     if (!transaction) return;
     setIsSharing(true);
 
-    const shareText = `🧾 NAEEM DATA SUB TRANSACTION RECEIPT
+    const shareText = `🧾 NPAY TRANSACTION RECEIPT
 ------------------------------------------
 Service: ${transaction.planName || transaction.serviceType.toUpperCase()}
 Amount: ₦${transaction.amount.toLocaleString()}
 Recipient: ${transaction.recipient}
-Network/Provider: ${(transaction.network || 'N/A').toUpperCase()}
+Network/Service: ${(transaction.network || 'N/A').toUpperCase()}
 Reference: ${transaction.reference}
 Status: ${transaction.status.toUpperCase()}
-${transaction.token ? `STS Token: ${transaction.token}\n` : ''}Date: ${new Date(transaction.date).toLocaleString('en-NG', { dateStyle: 'medium', timeStyle: 'short' })}
+${transaction.token ? `STS Token: ${transaction.token}\n` : ''}Date: ${new Date(transaction.date || (transaction as any).createdAt || Date.now()).toLocaleString('en-NG', { dateStyle: 'medium', timeStyle: 'short' })}
 ------------------------------------------
-Verified by NAEEM DATA SUB Platform`;
+Verified by NPAY Platform`;
 
     if (navigator.share) {
       try {
@@ -138,26 +146,46 @@ Verified by NAEEM DATA SUB Platform`;
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
-      <div className="relative w-full max-w-md bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-100 dark:border-slate-800 overflow-hidden flex flex-col max-h-[92vh]">
-        {/* Header Branding */}
-        <div className="bg-gradient-to-r from-purple-800 via-purple-700 to-indigo-800 p-5 text-white flex items-center justify-between">
-          <Logo size="sm" white showTagline={false} />
-          <button
-            onClick={onClose}
-            className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 text-white flex items-center justify-center transition-colors"
+    <AnimatePresence>
+      {isOpen && transaction && (
+        <motion.div
+          key="receipt-modal-backdrop"
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          exit={{ opacity: 0 }}
+          transition={{ duration: 0.2, ease: 'easeOut' }}
+          onClick={(e) => {
+            if (e.target === e.currentTarget) onClose();
+          }}
+          className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-900/60 backdrop-blur-sm"
+        >
+          <motion.div
+            key="receipt-modal-card"
+            initial={{ opacity: 0, scale: 0.84, y: 12 }}
+            animate={{ opacity: 1, scale: 1, y: 0 }}
+            exit={{ opacity: 0, scale: 0.9, y: 8 }}
+            transition={{ type: 'spring', stiffness: 380, damping: 28, mass: 0.85 }}
+            className="relative w-full max-w-md origin-center bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-100 dark:border-slate-800 overflow-hidden flex flex-col max-h-[92vh]"
           >
-            ✕
-          </button>
-        </div>
-
-        {/* Content Body */}
-        <div className="p-6 overflow-y-auto space-y-5">
-          {/* Status & Amount */}
-          <div className="text-center pb-4 border-b border-dashed border-slate-200 dark:border-slate-800">
-            <div className="flex justify-center mb-2">
-              {getStatusBadge(transaction.status)}
+            {/* Header Branding */}
+            <div className="bg-gradient-to-r from-purple-800 via-purple-700 to-indigo-800 p-5 text-white flex items-center justify-between">
+              <Logo size="sm" white showTagline={false} />
+              <button
+                onClick={onClose}
+                className="w-8 h-8 rounded-full bg-white/20 hover:bg-white/30 text-white flex items-center justify-center transition-colors"
+                aria-label="Close receipt"
+              >
+                ✕
+              </button>
             </div>
+
+            {/* Content Body */}
+            <div className="p-6 overflow-y-auto space-y-5">
+              {/* Status & Amount */}
+              <div className="text-center pb-4 border-b border-dashed border-slate-200 dark:border-slate-800">
+                <div className="flex justify-center mb-2">
+                  {getStatusBadge(transaction.status)}
+                </div>
             <h2 className="text-3xl font-black text-slate-900 dark:text-white mt-1">
               ₦{transaction.amount.toLocaleString()}
             </h2>
@@ -212,7 +240,7 @@ Verified by NAEEM DATA SUB Platform`;
 
             {transaction.network && (
               <div className="flex justify-between items-center py-1">
-                <span className="text-slate-500 dark:text-slate-400">Network / Provider</span>
+                <span className="text-slate-500 dark:text-slate-400">Network / Service</span>
                 <span className="font-bold text-slate-900 dark:text-white uppercase">
                   {transaction.network}
                 </span>
@@ -236,7 +264,7 @@ Verified by NAEEM DATA SUB Platform`;
             <div className="flex justify-between items-center py-1">
               <span className="text-slate-500 dark:text-slate-400">Date & Time</span>
               <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">
-                {new Date(transaction.date).toLocaleString('en-NG', {
+                {new Date(transaction.date || (transaction as any).createdAt || Date.now()).toLocaleString('en-NG', {
                   dateStyle: 'medium',
                   timeStyle: 'short',
                 })}
@@ -254,7 +282,7 @@ Verified by NAEEM DATA SUB Platform`;
 
             {transaction.providerReference && (
               <div className="flex justify-between items-center py-1">
-                <span className="text-slate-500 dark:text-slate-400">Provider Ref</span>
+                <span className="text-slate-500 dark:text-slate-400">Session Ref</span>
                 <span className="font-mono text-xs text-slate-600 dark:text-slate-400">
                   {transaction.providerReference}
                 </span>
@@ -301,7 +329,7 @@ Verified by NAEEM DATA SUB Platform`;
           {/* Security stamp */}
           <div className="flex items-center justify-center gap-1.5 py-2 text-xs font-medium text-slate-400">
             <ShieldCheck className="w-4 h-4 text-emerald-500" />
-            <span>Verified by NAEEM DATA SUB Platform</span>
+            <span>Verified by NPAY Platform</span>
           </div>
         </div>
 
@@ -353,7 +381,9 @@ Verified by NAEEM DATA SUB Platform`;
             Done
           </button>
         </div>
-      </div>
-    </div>
+            </motion.div>
+          </motion.div>
+        )}
+      </AnimatePresence>
   );
 };

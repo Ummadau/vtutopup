@@ -32,7 +32,7 @@ export interface VirtualAccount {
   bankId?: '9PSB' | 'SAFEHAVEN' | 'PROVIDUS' | 'PALMPAY';
   reference?: string;
   createdAt?: string;
-  provider?: 'billstack' | 'manual';
+  provider?: 'billstack' | 'automated' | 'manual';
   depositFee?: number;
 }
 

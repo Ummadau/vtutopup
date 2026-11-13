@@ -9,12 +9,16 @@ export default async function handler(req, res) {
 
   if (req.method === 'OPTIONS') return res.status(200).json({ success: true });
 
-  const userId = req.headers['x-user-id'] || 'usr_ahmad_01';
+  const userId = req.headers['x-user-id'];
+  if (!userId) {
+    return res.status(401).json({ error: 'Authentication required' });
+  }
+
   try {
     const user = await findUserByIdentifier(userId);
-    const virtualAccounts = (user && Array.isArray(user.virtualAccounts)) ? user.virtualAccounts : [];
+    const virtualAccounts = user && Array.isArray(user.virtualAccounts) ? user.virtualAccounts : [];
     return res.status(200).json({ success: true, virtualAccounts });
-  } catch (err) {
+  } catch {
     return res.status(200).json({ success: true, virtualAccounts: [] });
   }
 }

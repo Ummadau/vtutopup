@@ -28,6 +28,12 @@ import {
   handleAirtimePurchase,
   handleVerifyMeter,
   handleVerifyCable,
+  handleElectricityPurchase,
+  handleCablePurchase,
+  handleExamPurchase,
+  handleWalletFundInitiate,
+  handleWalletFundVerify,
+  handleSupportTickets,
 } from './services/purchase_handler.js';
 
 export default async function handler(req, res) {
@@ -41,7 +47,7 @@ export default async function handler(req, res) {
   const url = req.url || '';
 
   // 1. Webhook endpoints
-  if (url.includes('/webhooks/unitybills') || url.includes('/hooks/deposits')) {
+  if (url.includes('/webhooks/unitybills') || url.includes('/hooks/deposits') || url.includes('/webhooks/billstack')) {
     return handleUnityBillsWebhookRequest(req, res);
   }
 
@@ -59,13 +65,18 @@ export default async function handler(req, res) {
   if (url.includes('/wallet/virtual-account')) return getVirtualAccountHandler(req, res);
   if (url.includes('/wallet/manual-fund/config')) return manualFundConfigHandler(req, res);
   if (url.includes('/wallet/manual-fund/submit')) return manualFundSubmitHandler(req, res);
+  if (url.includes('/wallet/fund/initiate')) return handleWalletFundInitiate(req, res);
+  if (url.includes('/wallet/fund/verify')) return handleWalletFundVerify(req, res);
   if (url.includes('/wallet/summary')) return walletSummaryHandler(req, res);
 
   // 4. Purchases & Verifications
   if (url.includes('/services/data/purchase')) return handleDataPurchase(req, res);
   if (url.includes('/services/airtime/purchase')) return handleAirtimePurchase(req, res);
   if (url.includes('/services/electricity/verify-meter')) return handleVerifyMeter(req, res);
+  if (url.includes('/services/electricity/purchase')) return handleElectricityPurchase(req, res);
   if (url.includes('/services/cable/verify-card')) return handleVerifyCable(req, res);
+  if (url.includes('/services/cable/purchase')) return handleCablePurchase(req, res);
+  if (url.includes('/services/exam/purchase')) return handleExamPurchase(req, res);
 
   // 5. Product Services & Catalogs
   if (url.includes('/services/data/plans')) return handleDataPlans(req, res);
@@ -76,17 +87,16 @@ export default async function handler(req, res) {
   if (url.includes('/services/exam/pins')) return handleExamPins(req, res);
   if (url.includes('/settings')) return handleSettings(req, res);
 
-  // 6. Activity data endpoints (transactions, notifications)
+  // 6. Activity & Support endpoints
+  if (url.includes('/support/tickets')) return handleSupportTickets(req, res);
   if (url.includes('/transactions')) return transactionsHandler(req, res);
   if (url.includes('/notifications')) return notificationsHandler(req, res);
 
-  // 7. Default Safe JSON fallback for any unhandled endpoint
-  return res.status(200).json({
-    success: true,
-    status: 'active',
-    message: 'NAEEM DATA SUB Vercel Serverless API Service',
+  // 7. Default 404 JSON response for unhandled routes
+  return res.status(404).json({
+    success: false,
+    error: 'API endpoint not found',
     url: req.url,
     method: req.method,
-    timestamp: new Date().toISOString(),
   });
 }

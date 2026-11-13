@@ -6,16 +6,14 @@ import {
   Lock,
   Eye,
   EyeOff,
-  ShieldCheck,
-  ArrowRight,
-  Sparkles,
-  Key
+  Sparkles
 } from 'lucide-react';
 import {
   signInWithEmailAndPassword,
   createUserWithEmailAndPassword,
   signInWithPopup,
-  GoogleAuthProvider
+  GoogleAuthProvider,
+  sendPasswordResetEmail
 } from 'firebase/auth';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { auth, firestoreDb } from '../lib/firebase.ts';
@@ -30,44 +28,13 @@ interface AuthModalProps {
   onAuthSuccess: (user: User) => void;
 }
 
-const getRememberedUser = () => {
-  try {
-    const item = localStorage.getItem('naeem_remembered_user');
-    return item ? JSON.parse(item) : null;
-  } catch {
-    return null;
-  }
-};
-
 export const AuthModal: React.FC<AuthModalProps> = ({
   isOpen,
   onClose,
   initialMode = 'login',
   onAuthSuccess,
 }) => {
-  const [rememberedUser, setRememberedUser] = useState<any>(getRememberedUser);
-  const [mode, setMode] = useState<'login' | 'register' | 'otp' | 'pin_unlock'>(() => {
-    const rem = getRememberedUser();
-    if (rem && (rem.email || rem.phone || rem.id)) {
-      return 'pin_unlock';
-    }
-    return initialMode;
-  });
-
-  React.useEffect(() => {
-    if (isOpen) {
-      const rem = getRememberedUser();
-      setRememberedUser(rem);
-      if (rem && (rem.email || rem.phone || rem.id)) {
-        setMode('pin_unlock');
-      } else {
-        setMode(initialMode);
-      }
-      setErrorMessage(null);
-      setPinUnlockCode('');
-    }
-  }, [isOpen, initialMode]);
-
+  const [mode, setMode] = useState<'login' | 'register'>(initialMode);
   const [showPassword, setShowPassword] = useState(false);
 
   // Form states
@@ -79,61 +46,18 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const [referralCode, setReferralCode] = useState('');
   const [identifier, setIdentifier] = useState('');
   const [loginPassword, setLoginPassword] = useState('');
-  const [otpCode, setOtpCode] = useState('');
-  const [pinUnlockCode, setPinUnlockCode] = useState('');
 
   const [loading, setLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
+  const [infoMessage, setInfoMessage] = useState<string | null>(null);
 
-  // Save remembered user to localStorage
-  const saveRememberedUser = (u: User) => {
-    try {
-      const remData = {
-        id: u.id,
-        name: u.name,
-        email: u.email,
-        phone: u.phone,
-        avatar: u.avatar,
-        transactionPin: u.transactionPin || '1234',
-      };
-      localStorage.setItem('naeem_remembered_user', JSON.stringify(remData));
-      setRememberedUser(remData);
-    } catch {
-      // Ignore
+  React.useEffect(() => {
+    if (isOpen) {
+      setMode(initialMode);
+      setErrorMessage(null);
+      setInfoMessage(null);
     }
-  };
-
-  // Quick PIN Unlock handler
-  const handlePinUnlock = async (pinInput: string) => {
-    if (!rememberedUser) return;
-    setErrorMessage(null);
-    setLoading(true);
-
-    try {
-      const identifierToUse = rememberedUser.email || rememberedUser.phone;
-      const res = await fetch('/api/auth/pin-login', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ identifier: identifierToUse, pin: pinInput }),
-      });
-
-      const data = await res.json().catch(() => ({}));
-      if (!res.ok || !data.success) {
-        throw new Error(data.error || 'Incorrect 4-digit PIN. Default PIN is 1234.');
-      }
-
-      await syncUserToFirestore(data.user).catch(err => console.warn('Firestore sync note:', err));
-      saveRememberedUser(data.user);
-
-      onAuthSuccess(data.user);
-      onClose();
-    } catch (err: any) {
-      setErrorMessage(err.message || 'PIN unlock failed');
-      setPinUnlockCode('');
-    } finally {
-      setLoading(false);
-    }
-  };
+  }, [isOpen, initialMode]);
 
   if (!isOpen) return null;
 
@@ -154,6 +78,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
   const handleRegister = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
+    setInfoMessage(null);
 
     if (password !== confirmPassword) {
       setErrorMessage('Passwords do not match');
@@ -172,10 +97,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       let fbUid: string | null = null;
       try {
         const cred = await createUserWithEmailAndPassword(auth, cleanEmail, password);
-        fbUid = cred.user?.uid;
+        fbUid = cred.user?.uid || null;
       } catch (fbErr: any) {
         if (fbErr.code === 'auth/email-already-in-use') {
-          console.warn('Firebase user already exists, proceeding with profile registration.');
+          throw new Error('An account with this email already exists. Please sign in instead.');
         } else if (fbErr.code !== 'auth/configuration-not-found') {
           console.warn('Firebase Auth note:', fbErr.message);
         }
@@ -187,7 +112,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         const res = await fetch('/api/auth/register', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ name, phone, email: cleanEmail, password, referralCode }),
+          body: JSON.stringify({ name, phone, email: cleanEmail, password, referralCode, uid: fbUid }),
         });
         const data = await safeParseJson(res);
         if (res.ok && data?.user) {
@@ -201,12 +126,11 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         }
       }
 
-      // 3. Fallback: If backend is unreachable or returns non-JSON, construct user object directly
-      if (!registeredUser) {
-        const newId = fbUid || `usr_${Date.now()}`;
+      // 3. Fallback: Construct user only if Firebase Auth succeeded and backend returned non-JSON
+      if (!registeredUser && fbUid) {
         const generatedRefCode = name.replace(/\s+/g, '').slice(0, 4).toUpperCase() + Math.floor(100 + Math.random() * 900);
         registeredUser = {
-          id: newId,
+          id: fbUid,
           name: name.trim(),
           email: cleanEmail,
           phone: phone.trim(),
@@ -219,14 +143,16 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           totalSavings: 0,
           referralEarnings: 0,
           totalTransactionsCount: 0,
-          transactionPin: '1234',
           createdAt: new Date().toISOString(),
         };
       }
 
+      if (!registeredUser) {
+        throw new Error('Registration service unavailable. Please try again.');
+      }
+
       // 4. Persist to Firestore
       await setUser(registeredUser).catch(err => console.warn('Firestore sync note:', err));
-      saveRememberedUser(registeredUser);
 
       onAuthSuccess(registeredUser);
       onClose();
@@ -237,57 +163,39 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
-  // Unified Single Login with Firebase Auth + Firestore Resilience
+  // Unified Single Login with Firebase Auth + Backend Verification
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault();
     setErrorMessage(null);
-    setLoading(true);
+    setInfoMessage(null);
 
     const cleanIdentifier = identifier.trim().toLowerCase();
+    if (!cleanIdentifier || !loginPassword) {
+      setErrorMessage('Please enter both your email/phone and password.');
+      return;
+    }
 
+    setLoading(true);
     try {
-      // 1. Super Admin instant access
-      if (cleanIdentifier === 'naeemummadau@gmail.com' || cleanIdentifier === '08000000001') {
-        if (loginPassword === 'naeem1234' || !loginPassword || loginPassword === 'google_oauth_authenticated') {
-          const adminUser: User = {
-            id: 'usr_admin_01',
-            name: 'Naeem Ummadau',
-            email: 'naeemummadau@gmail.com',
-            phone: '08000000001',
-            role: 'admin',
-            status: 'active',
-            isVerified: true,
-            referralCode: 'ADMIN01',
-            walletBalance: 250000,
-            totalSavings: 0,
-            referralEarnings: 0,
-            totalTransactionsCount: 520,
-            transactionPin: '1234',
-            createdAt: '2025-12-01T08:00:00Z',
-          };
-          saveRememberedUser(adminUser);
-          onAuthSuccess(adminUser);
-          onClose();
-          return;
-        } else {
-          throw new Error('Incorrect administrator password');
-        }
-      }
-
-      // 2. Firebase Auth sign in if email
+      // 1. Firebase Auth sign in if identifier is an email
       let fbAuthed = false;
+      let fbUid: string | null = null;
       if (cleanIdentifier.includes('@')) {
         try {
-          await signInWithEmailAndPassword(auth, cleanIdentifier, loginPassword);
+          const cred = await signInWithEmailAndPassword(auth, cleanIdentifier, loginPassword);
           fbAuthed = true;
+          fbUid = cred.user?.uid || null;
         } catch (fbErr: any) {
-          if (fbErr.code === 'auth/wrong-password') {
-            throw new Error('Incorrect password. Please verify your password.');
+          if (fbErr.code === 'auth/wrong-password' || fbErr.code === 'auth/invalid-credential') {
+            // Only abort immediately if not logging in with a server-managed seed admin password
+            if (cleanIdentifier !== 'naeemummadau@gmail.com') {
+              throw new Error('Incorrect password. Please verify your password.');
+            }
           }
         }
       }
 
-      // 3. Try backend API
+      // 2. Verify with backend API
       let authedUser: User | null = null;
       try {
         const res = await fetch('/api/auth/login', {
@@ -303,33 +211,51 @@ export const AuthModal: React.FC<AuthModalProps> = ({
         }
       } catch (fetchErr: any) {
         if (fetchErr.message && !fetchErr.message.includes('Unexpected token') && !fetchErr.message.includes('JSON')) {
-          throw fetchErr;
+          if (!fbAuthed) {
+            throw fetchErr;
+          }
         }
       }
 
-      // 4. Fallback: If backend is unreachable or returned non-JSON, look up user directly in Firestore
-      if (!authedUser && (fbAuthed || cleanIdentifier)) {
+      // 3. Synchronize Firebase Auth session if phone/username login succeeded on server
+      if (authedUser && !fbAuthed && authedUser.email) {
+        await signInWithEmailAndPassword(auth, authedUser.email, loginPassword).catch(() => {});
+      }
+
+      // 4. Fallback ONLY if Firebase Auth already verified the user's password
+      if (!authedUser && fbAuthed) {
         try {
-          if (rememberedUser && (rememberedUser.email?.toLowerCase() === cleanIdentifier || rememberedUser.phone === cleanIdentifier)) {
-            authedUser = rememberedUser;
-          } else {
-            const qUsers = query(collection(firestoreDb, 'users'), where('email', '==', cleanIdentifier));
-            const snap = await getDocs(qUsers).catch(() => null);
-            if (snap && !snap.empty) {
-              authedUser = snap.docs[0].data() as User;
-            }
+          const qUsers = query(collection(firestoreDb, 'users'), where('email', '==', cleanIdentifier));
+          const snap = await getDocs(qUsers).catch(() => null);
+          if (snap && !snap.empty) {
+            authedUser = snap.docs[0].data() as User;
+          } else if (fbUid) {
+            authedUser = {
+              id: fbUid,
+              name: cleanIdentifier.split('@')[0],
+              email: cleanIdentifier,
+              phone: '',
+              role: (cleanIdentifier === 'naeemummadau@gmail.com' || cleanIdentifier === 'ahmadnaim2877@gmail.com') ? 'admin' : 'customer',
+              status: 'active',
+              isVerified: true,
+              referralCode: 'NPAY' + Math.floor(100 + Math.random() * 900),
+              walletBalance: 0,
+              totalSavings: 0,
+              referralEarnings: 0,
+              totalTransactionsCount: 0,
+              createdAt: new Date().toISOString(),
+            };
           }
         } catch (fsErr) {
-          console.warn('Firestore fallback lookup note:', fsErr);
+          console.warn('Firestore verified lookup note:', fsErr);
         }
       }
 
       if (!authedUser) {
-        throw new Error('User account not found. Please verify your email/phone or register a new account.');
+        throw new Error('Invalid credentials or account not found. Please check your details.');
       }
 
       await syncUserToFirestore(authedUser).catch(err => console.warn('Firestore sync note:', err));
-      saveRememberedUser(authedUser);
 
       onAuthSuccess(authedUser);
       onClose();
@@ -340,10 +266,32 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
-  // Google Sign In via Firebase Auth + Firestore
+  // Password Reset via Firebase Auth
+  const handleForgotPassword = async () => {
+    setErrorMessage(null);
+    setInfoMessage(null);
+    const cleanEmail = identifier.trim().toLowerCase();
+    if (!cleanEmail || !cleanEmail.includes('@')) {
+      setErrorMessage('Enter your registered email address in the field above, then click Forgot Password.');
+      return;
+    }
+
+    setLoading(true);
+    try {
+      await sendPasswordResetEmail(auth, cleanEmail);
+      setInfoMessage(`Password reset instructions have been sent to ${cleanEmail}. Please check your inbox.`);
+    } catch (err: any) {
+      setErrorMessage(err?.message || 'Unable to send password reset email. Please verify your email address.');
+    } finally {
+      setLoading(false);
+    }
+  };
+
+  // Google Sign In via Firebase Auth + Verified ID Token
   const handleGoogleSignIn = async () => {
     setLoading(true);
     setErrorMessage(null);
+    setInfoMessage(null);
     try {
       const provider = new GoogleAuthProvider();
       const result = await signInWithPopup(auth, provider);
@@ -351,14 +299,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
       if (!fbUser.email) throw new Error('No email returned from Google');
       const cleanEmail = fbUser.email.toLowerCase();
+      const idToken = await fbUser.getIdToken();
 
-      // Check backend or Firestore
+      // Verify token with backend API
       let userObj: User | null = null;
       try {
         const res = await fetch('/api/auth/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ identifier: cleanEmail, password: 'google_oauth_authenticated' }),
+          body: JSON.stringify({ identifier: cleanEmail, idToken }),
         });
         const data = await safeParseJson(res);
         if (res.ok && data?.user) {
@@ -391,17 +340,15 @@ export const AuthModal: React.FC<AuthModalProps> = ({
           totalSavings: 0,
           referralEarnings: 0,
           totalTransactionsCount: 0,
-          transactionPin: '1234',
           createdAt: new Date().toISOString(),
         };
         await setUser(userObj).catch(() => {});
       }
 
-      if (cleanEmail === 'naeemummadau@gmail.com') {
+      if (cleanEmail === 'naeemummadau@gmail.com' || cleanEmail === 'ahmadnaim2877@gmail.com') {
         userObj.role = 'admin';
       }
 
-      saveRememberedUser(userObj);
       onAuthSuccess(userObj);
       onClose();
     } catch (err: any) {
@@ -411,54 +358,10 @@ export const AuthModal: React.FC<AuthModalProps> = ({
     }
   };
 
-  // OTP Login
-  const handleOtpLogin = async (e: React.FormEvent) => {
-    e.preventDefault();
-    setErrorMessage(null);
-    setLoading(true);
-
-    try {
-      let userObj: User | null = null;
-      try {
-        const res = await fetch('/api/auth/otp-login', {
-          method: 'POST',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify({ identifier, otp: otpCode || '123456' }),
-        });
-        const data = await safeParseJson(res);
-        if (res.ok && data?.user) {
-          userObj = data.user;
-        } else if (data?.error) {
-          throw new Error(data.error);
-        }
-      } catch (e: any) {
-        if (e.message && !e.message.includes('Unexpected token') && !e.message.includes('JSON')) throw e;
-      }
-
-      if (!userObj) {
-        if (rememberedUser && (rememberedUser.phone === identifier || rememberedUser.email === identifier)) {
-          userObj = rememberedUser;
-        }
-      }
-
-      if (!userObj) {
-        throw new Error('OTP verification failed. User not found.');
-      }
-
-      saveRememberedUser(userObj);
-      onAuthSuccess(userObj);
-      onClose();
-    } catch (err: any) {
-      setErrorMessage(err.message || 'OTP verification failed');
-    } finally {
-      setLoading(false);
-    }
-  };
-
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-3 sm:p-4 bg-slate-900/60 backdrop-blur-sm animate-fade-in">
       <div className="relative w-full max-w-md bg-white dark:bg-slate-900 rounded-3xl shadow-2xl border border-slate-100 dark:border-slate-800 overflow-hidden flex flex-col max-h-[92vh]">
-        {/* Curved Purple Top matching mockup */}
+        {/* Curved Purple Top */}
         <div className="relative bg-gradient-to-br from-purple-800 via-purple-700 to-indigo-900 pt-7 pb-6 px-6 text-white text-center">
           <button
             onClick={onClose}
@@ -479,148 +382,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
             </div>
           )}
 
-          {/* QUICK 4-DIGIT PIN UNLOCK MODE */}
-          {mode === 'pin_unlock' && rememberedUser && (
-            <div className="space-y-4">
-              <div className="text-center space-y-2">
-                <div className="w-16 h-16 rounded-full bg-gradient-to-tr from-purple-700 to-indigo-600 p-0.5 mx-auto shadow-md">
-                  <div className="w-full h-full rounded-full bg-purple-100 dark:bg-slate-800 overflow-hidden flex items-center justify-center text-purple-900 dark:text-purple-300 font-black text-xl">
-                    {rememberedUser.avatar ? (
-                      <img src={rememberedUser.avatar} alt={rememberedUser.name} className="w-full h-full object-cover" />
-                    ) : (
-                      (rememberedUser.name || 'User').slice(0, 2).toUpperCase()
-                    )}
-                  </div>
-                </div>
-                <div>
-                  <h3 className="text-lg font-black text-slate-900 dark:text-white">
-                    Welcome back, {rememberedUser.name}!
-                  </h3>
-                  <p className="text-xs text-slate-500 dark:text-slate-400 font-mono">
-                    {rememberedUser.email || rememberedUser.phone}
-                  </p>
-                </div>
-                <div className="p-2 rounded-2xl bg-purple-50 dark:bg-purple-950/50 border border-purple-200 dark:border-purple-800">
-                  <p className="text-xs font-bold text-purple-800 dark:text-purple-300">
-                    Enter your 4-digit PIN to unlock
-                  </p>
-                  <p className="text-[11px] text-purple-600 dark:text-purple-400 font-medium mt-0.5">
-                    Default PIN is <strong className="font-mono font-bold">1234</strong>
-                  </p>
-                </div>
-              </div>
-
-              {/* 4 PIN Dots */}
-              <div className="flex justify-center items-center gap-3 py-1">
-                {[0, 1, 2, 3].map((index) => (
-                  <div
-                    key={index}
-                    className={`w-10 h-12 rounded-2xl border-2 flex items-center justify-center text-xl font-bold font-mono transition-all ${
-                      pinUnlockCode.length > index
-                        ? 'border-purple-600 bg-purple-50 dark:bg-purple-950/60 text-purple-900 dark:text-white'
-                        : 'border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/40'
-                    }`}
-                  >
-                    {pinUnlockCode.length > index ? '•' : ''}
-                  </div>
-                ))}
-              </div>
-
-              {/* Keypad */}
-              <div className="grid grid-cols-3 gap-2 max-w-xs mx-auto">
-                {['1', '2', '3', '4', '5', '6', '7', '8', '9'].map((num) => (
-                  <button
-                    key={num}
-                    type="button"
-                    disabled={loading}
-                    onClick={() => {
-                      if (pinUnlockCode.length < 4) {
-                        const next = pinUnlockCode + num;
-                        setPinUnlockCode(next);
-                        setErrorMessage(null);
-                        if (next.length === 4) {
-                          handlePinUnlock(next);
-                        }
-                      }
-                    }}
-                    className="py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-purple-100 dark:hover:bg-purple-950/50 text-slate-900 dark:text-white font-black text-base transition active:scale-95 disabled:opacity-50"
-                  >
-                    {num}
-                  </button>
-                ))}
-                <button
-                  type="button"
-                  disabled={loading}
-                  onClick={() => {
-                    setPinUnlockCode('');
-                    setErrorMessage(null);
-                  }}
-                  className="py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-500 font-bold text-xs"
-                >
-                  Clear
-                </button>
-                <button
-                  type="button"
-                  disabled={loading}
-                  onClick={() => {
-                    if (pinUnlockCode.length < 4) {
-                      const next = pinUnlockCode + '0';
-                      setPinUnlockCode(next);
-                      setErrorMessage(null);
-                      if (next.length === 4) {
-                        handlePinUnlock(next);
-                      }
-                    }
-                  }}
-                  className="py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-purple-100 dark:hover:bg-purple-950/50 text-slate-900 dark:text-white font-black text-base transition active:scale-95 disabled:opacity-50"
-                >
-                  0
-                </button>
-                <button
-                  type="button"
-                  disabled={loading}
-                  onClick={() => {
-                    setPinUnlockCode(prev => prev.slice(0, -1));
-                    setErrorMessage(null);
-                  }}
-                  className="py-2.5 rounded-xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 dark:hover:bg-slate-700 text-slate-700 dark:text-slate-300 font-bold text-xs"
-                >
-                  ⌫
-                </button>
-              </div>
-
-              {loading && (
-                <div className="flex items-center justify-center gap-2 text-xs font-bold text-purple-600 dark:text-purple-400 py-1">
-                  <div className="w-4 h-4 border-2 border-purple-600 border-t-transparent rounded-full animate-spin" />
-                  <span>Verifying PIN...</span>
-                </div>
-              )}
-
-              <div className="pt-2 border-t border-slate-200 dark:border-slate-800 flex flex-col gap-2">
-                <button
-                  type="button"
-                  onClick={() => { setErrorMessage(null); setMode('login'); }}
-                  className="w-full py-2.5 rounded-2xl bg-purple-100 dark:bg-purple-950/60 hover:bg-purple-200 text-purple-800 dark:text-purple-300 font-bold text-xs transition flex items-center justify-center gap-2"
-                >
-                  <Lock className="w-3.5 h-3.5" />
-                  <span>Sign In with Password Instead</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => {
-                    localStorage.removeItem('naeem_remembered_user');
-                    localStorage.removeItem('naeem_user_session');
-                    setRememberedUser(null);
-                    setErrorMessage(null);
-                    setMode('login');
-                  }}
-                  className="w-full py-2.5 rounded-2xl border border-slate-200 dark:border-slate-700 hover:bg-slate-100 dark:hover:bg-slate-800 text-slate-600 dark:text-slate-400 font-bold text-xs transition"
-                >
-                  Switch Account / Sign Out
-                </button>
-              </div>
+          {infoMessage && (
+            <div className="p-3 bg-emerald-50 dark:bg-emerald-950/40 border border-emerald-200 dark:border-emerald-800 rounded-xl text-emerald-700 dark:text-emerald-300 text-xs font-semibold">
+              {infoMessage}
             </div>
           )}
+
+
 
           {/* CREATE ACCOUNT MODE */}
           {mode === 'register' && (
@@ -779,8 +547,9 @@ export const AuthModal: React.FC<AuthModalProps> = ({
               <div className="text-right">
                 <button
                   type="button"
-                  onClick={() => alert('Password reset link sent to your registered email.')}
-                  className="text-xs font-bold text-purple-700 dark:text-purple-400 hover:underline"
+                  onClick={handleForgotPassword}
+                  disabled={loading}
+                  className="text-xs font-bold text-purple-700 dark:text-purple-400 hover:underline disabled:opacity-50"
                 >
                   Forgot Password?
                 </button>
@@ -818,73 +587,12 @@ export const AuthModal: React.FC<AuthModalProps> = ({
 
               <button
                 type="button"
-                onClick={() => setMode('otp')}
-                className="w-full py-3 rounded-2xl bg-slate-100 dark:bg-slate-800 hover:bg-slate-200 text-slate-800 dark:text-slate-200 font-bold text-xs transition flex items-center justify-center gap-2"
-              >
-                <ShieldCheck className="w-4 h-4 text-purple-600" />
-                <span>Login with OTP</span>
-              </button>
-
-              <button
-                type="button"
                 onClick={() => setMode('register')}
                 className="w-full py-3 rounded-2xl border border-purple-200 dark:border-purple-800/80 text-purple-700 dark:text-purple-400 font-bold text-xs transition flex items-center justify-center gap-2"
               >
                 <UserIcon className="w-4 h-4" />
                 <span>Create New Account</span>
               </button>
-            </form>
-          )}
-
-          {/* OTP LOGIN MODE */}
-          {mode === 'otp' && (
-            <form onSubmit={handleOtpLogin} className="space-y-4">
-              <div className="text-center mb-2">
-                <h3 className="text-xl font-black text-slate-900 dark:text-white">OTP Verification</h3>
-                <p className="text-xs text-slate-500 dark:text-slate-400">Enter the verification code sent to your phone</p>
-              </div>
-
-              <div className="relative">
-                <Phone className="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  required
-                  value={identifier}
-                  onChange={e => setIdentifier(e.target.value)}
-                  placeholder="Phone Number or Email"
-                  className="w-full pl-10 pr-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-bold text-slate-900 dark:text-white"
-                />
-              </div>
-
-              <div className="relative">
-                <Key className="w-4 h-4 text-slate-400 absolute left-4 top-1/2 -translate-y-1/2" />
-                <input
-                  type="text"
-                  maxLength={6}
-                  value={otpCode}
-                  onChange={e => setOtpCode(e.target.value)}
-                  placeholder="Enter 6-digit OTP (e.g. 123456)"
-                  className="w-full pl-10 pr-4 py-3 rounded-2xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 font-mono text-center tracking-widest text-base font-bold text-slate-900 dark:text-white"
-                />
-              </div>
-
-              <button
-                type="submit"
-                disabled={loading}
-                className="w-full py-3.5 rounded-2xl bg-purple-700 hover:bg-purple-800 text-white font-bold text-xs shadow-lg transition"
-              >
-                Verify & Sign In
-              </button>
-
-              <div className="text-center">
-                <button
-                  type="button"
-                  onClick={() => setMode('login')}
-                  className="text-xs font-bold text-purple-700 hover:underline"
-                >
-                  Back to Password Login
-                </button>
-              </div>
             </form>
           )}
         </div>

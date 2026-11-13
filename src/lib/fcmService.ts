@@ -1,7 +1,7 @@
 import { initializeApp } from 'firebase/app';
 import { getMessaging, getToken, onMessage, isSupported } from 'firebase/messaging';
 import { doc, setDoc } from 'firebase/firestore';
-import { firestoreDb } from './firebase.ts';
+import { firestoreDb, auth } from './firebase.ts';
 
 // Standard VAPID Key for Web Push (Firebase Cloud Messaging)
 export const VAPID_KEY = 'BEl0_naeem_data_sub_fcm_web_push_vapid_key_v1';
@@ -59,7 +59,7 @@ export async function requestFCMPermission(userId: string): Promise<string | nul
         token = `fcm_push_${userId}_${Date.now()}`;
       }
 
-      if (token && userId) {
+      if (token && userId && auth.currentUser && auth.currentUser.uid === userId) {
         const userDocRef = doc(firestoreDb, 'users', userId);
         await setDoc(
           userDocRef,
@@ -74,6 +74,7 @@ export async function requestFCMPermission(userId: string): Promise<string | nul
         console.log('Registered FCM Push Token for user:', userId, token.slice(0, 18) + '...');
         return token;
       }
+      return token;
     } else {
       console.warn('Notification permission denied by user.');
     }
@@ -94,7 +95,7 @@ export async function listenToForegroundPushMessages(
 
   return onMessage(messaging, (payload) => {
     console.log('[FCM Foreground Push Received]:', payload);
-    const title = payload.notification?.title || payload.data?.title || 'NAEEM DATA SUB Alert';
+    const title = payload.notification?.title || payload.data?.title || 'NPay Alert';
     const body = payload.notification?.body || payload.data?.body || 'You have a new transaction update.';
 
     // Show native browser notification if allowed

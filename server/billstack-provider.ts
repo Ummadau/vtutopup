@@ -1,5 +1,5 @@
 import { doc, getDoc, setDoc } from 'firebase/firestore';
-import { firestoreDb } from '../src/lib/firebase.ts';
+import { firestoreDb, auth } from '../src/lib/firebase.ts';
 import { BillStackConfig, VirtualAccount, User } from '../src/types/index.ts';
 import { db } from './db.ts';
 
@@ -21,6 +21,7 @@ let memoryBillStackConfig: BillStackConfig = { ...defaultBillStackConfig };
  * Load BillStack configuration from Firestore with memory fallback
  */
 export async function getFirestoreBillStackConfig(): Promise<BillStackConfig> {
+  if (!auth.currentUser) return memoryBillStackConfig;
   try {
     const docRef = doc(firestoreDb, 'systemSettings', 'billstack_config');
     const snap = await getDoc(docRef);
@@ -38,9 +39,6 @@ export async function getFirestoreBillStackConfig(): Promise<BillStackConfig> {
   return memoryBillStackConfig;
 }
 
-/**
- * Persist BillStack configuration into Firestore and update memory cache in realtime
- */
 export async function saveFirestoreBillStackConfig(config: Partial<BillStackConfig>): Promise<BillStackConfig> {
   memoryBillStackConfig = {
     ...memoryBillStackConfig,
@@ -48,18 +46,20 @@ export async function saveFirestoreBillStackConfig(config: Partial<BillStackConf
     lastTested: new Date().toISOString(),
   };
 
-  try {
-    const docRef = doc(firestoreDb, 'systemSettings', 'billstack_config');
-    await setDoc(
-      docRef,
-      {
-        ...memoryBillStackConfig,
-        updatedAt: new Date().toISOString(),
-      },
-      { merge: true }
-    );
-  } catch (err: any) {
-    console.warn('Firestore BillStack config save note:', err?.message || err);
+  if (auth.currentUser) {
+    try {
+      const docRef = doc(firestoreDb, 'systemSettings', 'billstack_config');
+      await setDoc(
+        docRef,
+        {
+          ...memoryBillStackConfig,
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      );
+    } catch (err: any) {
+      console.warn('Firestore BillStack config save note:', err?.message || err);
+    }
   }
 
   return memoryBillStackConfig;
@@ -199,19 +199,20 @@ export function saveUserVirtualAccount(userId: string, newAccount: VirtualAccoun
   const updated = [newAccount, ...filtered];
   db.virtualAccounts.set(userId, updated);
 
-  // Sync to Firestore user profile document
-  try {
-    const userDocRef = doc(firestoreDb, 'users', userId);
-    setDoc(
-      userDocRef,
-      {
-        virtualAccounts: updated,
-        updatedAt: new Date().toISOString(),
-      },
-      { merge: true }
-    ).catch(() => {});
-  } catch (err) {
-    // Non-fatal
+  if (auth.currentUser) {
+    try {
+      const userDocRef = doc(firestoreDb, 'users', userId);
+      setDoc(
+        userDocRef,
+        {
+          virtualAccounts: updated,
+          updatedAt: new Date().toISOString(),
+        },
+        { merge: true }
+      ).catch(() => {});
+    } catch {
+      // Non-fatal
+    }
   }
 
   return updated;

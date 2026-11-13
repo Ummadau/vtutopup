@@ -66,7 +66,7 @@ export async function registerBiometricAuth(user: { id: string; email: string; n
     const publicKeyCredentialCreationOptions: PublicKeyCredentialCreationOptions = {
       challenge,
       rp: {
-        name: 'NAEEM DATA SUB',
+        name: 'NPay',
         id: window.location.hostname || 'localhost',
       },
       user: {
