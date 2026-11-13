@@ -1,29 +1,30 @@
 // Vercel Serverless Function - Purchases, Verifications, Wallet Funding & Support Handler
 import {
-  FIRESTORE_BASE,
-  FIRESTORE_KEY,
   updateFirestoreUser,
-  unwrapFirestoreDoc,
-  wrapFirestoreDoc,
+  extractBearerToken,
 } from '../auth/_auth_helpers.js';
+import {
+  fsCreateDoc,
+  fsGetDoc,
+  fsPatchDoc,
+  fsRunQuery,
+} from '../_firestore.js';
 
-async function getUser(req) {
+async function getUser(req, userToken) {
   const userId = req.headers['x-user-id'] || req.body?.userId;
   if (!userId) return null;
 
   try {
-    const url = `${FIRESTORE_BASE}/users/${encodeURIComponent(userId)}?key=${FIRESTORE_KEY}`;
-    const res = await fetch(url);
-    if (!res.ok) return null;
-    const doc = await res.json();
-    return unwrapFirestoreDoc(doc);
+    const userRes = await fsGetDoc(`users/${userId}`, userToken);
+    if (userRes.ok && userRes.data) return userRes.data;
+    return null;
   } catch (err) {
     console.warn('Error fetching user from Firestore:', err);
     return null;
   }
 }
 
-async function getVTUGatewayConfig() {
+async function getVTUGatewayConfig(userToken) {
   const envKey = process.env.VTUNAIJA_API_KEY || '';
   const envBase = process.env.VTUNAIJA_BASE_URL || 'https://vtunaija.com.ng/api';
   if (envKey) {
@@ -31,16 +32,12 @@ async function getVTUGatewayConfig() {
   }
 
   try {
-    const cfgRes = await fetch(`${FIRESTORE_BASE}/systemSettings/vtu_config?key=${FIRESTORE_KEY}`);
-    if (cfgRes.ok) {
-      const cfgDoc = await cfgRes.json();
-      const cfg = unwrapFirestoreDoc(cfgDoc);
-      if (cfg?.apiKey) {
-        return {
-          apiKey: cfg.apiKey,
-          baseUrl: cfg.baseUrl || 'https://vtunaija.com.ng/api',
-        };
-      }
+    const cfgRes = await fsGetDoc('systemSettings/vtu_config', userToken);
+    if (cfgRes.ok && cfgRes.data?.apiKey) {
+      return {
+        apiKey: cfgRes.data.apiKey,
+        baseUrl: cfgRes.data.baseUrl || 'https://vtunaija.com.ng/api',
+      };
     }
   } catch (err) {
     console.warn('Gateway config lookup note:', err);
@@ -48,15 +45,12 @@ async function getVTUGatewayConfig() {
   return { apiKey: '', baseUrl: 'https://vtunaija.com.ng/api' };
 }
 
-async function recordTransaction(tx) {
+async function recordTransaction(tx, userToken) {
   try {
-    const url = `${FIRESTORE_BASE}/transactions/${encodeURIComponent(tx.id)}?key=${FIRESTORE_KEY}`;
-    const body = wrapFirestoreDoc(tx);
-    await fetch(url, {
-      method: 'PATCH',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
-    });
+    const createRes = await fsCreateDoc('transactions', tx.id, tx, userToken);
+    if (!createRes.ok && createRes.status === 409) {
+      await fsPatchDoc(`transactions/${tx.id}`, tx, null, userToken);
+    }
   } catch (err) {
     console.warn('Error recording transaction in Firestore:', err);
   }
@@ -70,10 +64,11 @@ function buildAuthHeader(apiKey) {
 export async function handleDataPurchase(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
+  const userToken = extractBearerToken(req);
   const body = req.body || {};
   const { recipientPhone, network, pin } = body;
 
-  const user = await getUser(req);
+  const user = await getUser(req, userToken);
   if (!user) {
     return res.status(401).json({ error: 'User not authenticated. Please log in.' });
   }
@@ -101,7 +96,7 @@ export async function handleDataPurchase(req, res) {
     });
   }
 
-  const { apiKey, baseUrl } = await getVTUGatewayConfig();
+  const { apiKey, baseUrl } = await getVTUGatewayConfig(userToken);
   if (!apiKey) {
     return res.status(503).json({
       success: false,
@@ -110,11 +105,15 @@ export async function handleDataPurchase(req, res) {
   }
 
   const newBalance = currentBalance - priceToPay;
-  await updateFirestoreUser(user.id, {
-    walletBalance: newBalance,
-    totalTransactionsCount: (user.totalTransactionsCount || 0) + 1,
-    totalSavings: (user.totalSavings || 0) + 50,
-  });
+  await updateFirestoreUser(
+    user.id,
+    {
+      walletBalance: newBalance,
+      totalTransactionsCount: (user.totalTransactionsCount || 0) + 1,
+      totalSavings: (user.totalSavings || 0) + 50,
+    },
+    userToken
+  );
 
   const reference = `NDS-DAT-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
   const nowIso = new Date().toISOString();
@@ -154,11 +153,15 @@ export async function handleDataPurchase(req, res) {
   }
 
   if (!dispatchSuccess) {
-    await updateFirestoreUser(user.id, {
-      walletBalance: currentBalance,
-      totalTransactionsCount: user.totalTransactionsCount || 0,
-      totalSavings: user.totalSavings || 0,
-    });
+    await updateFirestoreUser(
+      user.id,
+      {
+        walletBalance: currentBalance,
+        totalTransactionsCount: user.totalTransactionsCount || 0,
+        totalSavings: user.totalSavings || 0,
+      },
+      userToken
+    );
   }
 
   const tx = {
@@ -185,7 +188,7 @@ export async function handleDataPurchase(req, res) {
     createdAt: nowIso,
   };
 
-  await recordTransaction(tx);
+  await recordTransaction(tx, userToken);
 
   if (!dispatchSuccess) {
     return res.status(400).json({
@@ -212,10 +215,11 @@ export async function handleDataPurchase(req, res) {
 export async function handleAirtimePurchase(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
+  const userToken = extractBearerToken(req);
   const body = req.body || {};
   const { amount, recipientPhone, network, pin } = body;
 
-  const user = await getUser(req);
+  const user = await getUser(req, userToken);
   if (!user) {
     return res.status(401).json({ error: 'User not authenticated. Please log in.' });
   }
@@ -246,7 +250,7 @@ export async function handleAirtimePurchase(req, res) {
     });
   }
 
-  const { apiKey, baseUrl } = await getVTUGatewayConfig();
+  const { apiKey, baseUrl } = await getVTUGatewayConfig(userToken);
   if (!apiKey) {
     return res.status(503).json({
       success: false,
@@ -255,11 +259,15 @@ export async function handleAirtimePurchase(req, res) {
   }
 
   const newBalance = currentBalance - priceToPay;
-  await updateFirestoreUser(user.id, {
-    walletBalance: newBalance,
-    totalTransactionsCount: (user.totalTransactionsCount || 0) + 1,
-    totalSavings: (user.totalSavings || 0) + (airtimeAmount - priceToPay),
-  });
+  await updateFirestoreUser(
+    user.id,
+    {
+      walletBalance: newBalance,
+      totalTransactionsCount: (user.totalTransactionsCount || 0) + 1,
+      totalSavings: (user.totalSavings || 0) + (airtimeAmount - priceToPay),
+    },
+    userToken
+  );
 
   const reference = `NDS-AIR-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
   const nowIso = new Date().toISOString();
@@ -300,11 +308,15 @@ export async function handleAirtimePurchase(req, res) {
   }
 
   if (!dispatchSuccess) {
-    await updateFirestoreUser(user.id, {
-      walletBalance: currentBalance,
-      totalTransactionsCount: user.totalTransactionsCount || 0,
-      totalSavings: user.totalSavings || 0,
-    });
+    await updateFirestoreUser(
+      user.id,
+      {
+        walletBalance: currentBalance,
+        totalTransactionsCount: user.totalTransactionsCount || 0,
+        totalSavings: user.totalSavings || 0,
+      },
+      userToken
+    );
   }
 
   const tx = {
@@ -331,7 +343,7 @@ export async function handleAirtimePurchase(req, res) {
     createdAt: nowIso,
   };
 
-  await recordTransaction(tx);
+  await recordTransaction(tx, userToken);
 
   if (!dispatchSuccess) {
     return res.status(400).json({
@@ -392,10 +404,11 @@ export async function handleVerifyCable(req, res) {
 export async function handleElectricityPurchase(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
+  const userToken = extractBearerToken(req);
   const body = req.body || {};
   const { discoId, network, meterNumber, meterType, amount, pin } = body;
 
-  const user = await getUser(req);
+  const user = await getUser(req, userToken);
   if (!user) return res.status(401).json({ error: 'User not authenticated. Please log in.' });
 
   const userPin = String(user.transactionPin || '1234').trim();
@@ -417,7 +430,7 @@ export async function handleElectricityPurchase(req, res) {
     });
   }
 
-  const { apiKey, baseUrl } = await getVTUGatewayConfig();
+  const { apiKey, baseUrl } = await getVTUGatewayConfig(userToken);
   if (!apiKey) {
     return res.status(503).json({
       success: false,
@@ -426,10 +439,14 @@ export async function handleElectricityPurchase(req, res) {
   }
 
   const newBalance = currentBalance - totalCharge;
-  await updateFirestoreUser(user.id, {
-    walletBalance: newBalance,
-    totalTransactionsCount: (user.totalTransactionsCount || 0) + 1,
-  });
+  await updateFirestoreUser(
+    user.id,
+    {
+      walletBalance: newBalance,
+      totalTransactionsCount: (user.totalTransactionsCount || 0) + 1,
+    },
+    userToken
+  );
 
   const reference = `NDS-ELE-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
   const nowIso = new Date().toISOString();
@@ -466,10 +483,14 @@ export async function handleElectricityPurchase(req, res) {
   }
 
   if (!dispatchSuccess) {
-    await updateFirestoreUser(user.id, {
-      walletBalance: currentBalance,
-      totalTransactionsCount: user.totalTransactionsCount || 0,
-    });
+    await updateFirestoreUser(
+      user.id,
+      {
+        walletBalance: currentBalance,
+        totalTransactionsCount: user.totalTransactionsCount || 0,
+      },
+      userToken
+    );
   }
 
   const tx = {
@@ -494,7 +515,7 @@ export async function handleElectricityPurchase(req, res) {
     createdAt: nowIso,
   };
 
-  await recordTransaction(tx);
+  await recordTransaction(tx, userToken);
 
   if (!dispatchSuccess) {
     return res.status(400).json({
@@ -520,10 +541,11 @@ export async function handleElectricityPurchase(req, res) {
 export async function handleCablePurchase(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
+  const userToken = extractBearerToken(req);
   const body = req.body || {};
   const { packageId, provider, iucNumber, pin } = body;
 
-  const user = await getUser(req);
+  const user = await getUser(req, userToken);
   if (!user) return res.status(401).json({ error: 'User not authenticated. Please log in.' });
 
   const userPin = String(user.transactionPin || '1234').trim();
@@ -539,7 +561,7 @@ export async function handleCablePurchase(req, res) {
     });
   }
 
-  const { apiKey, baseUrl } = await getVTUGatewayConfig();
+  const { apiKey, baseUrl } = await getVTUGatewayConfig(userToken);
   if (!apiKey) {
     return res.status(503).json({
       success: false,
@@ -548,10 +570,14 @@ export async function handleCablePurchase(req, res) {
   }
 
   const newBalance = currentBalance - amount;
-  await updateFirestoreUser(user.id, {
-    walletBalance: newBalance,
-    totalTransactionsCount: (user.totalTransactionsCount || 0) + 1,
-  });
+  await updateFirestoreUser(
+    user.id,
+    {
+      walletBalance: newBalance,
+      totalTransactionsCount: (user.totalTransactionsCount || 0) + 1,
+    },
+    userToken
+  );
 
   const reference = `NDS-CAB-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
   const nowIso = new Date().toISOString();
@@ -585,10 +611,14 @@ export async function handleCablePurchase(req, res) {
   }
 
   if (!dispatchSuccess) {
-    await updateFirestoreUser(user.id, {
-      walletBalance: currentBalance,
-      totalTransactionsCount: user.totalTransactionsCount || 0,
-    });
+    await updateFirestoreUser(
+      user.id,
+      {
+        walletBalance: currentBalance,
+        totalTransactionsCount: user.totalTransactionsCount || 0,
+      },
+      userToken
+    );
   }
 
   const tx = {
@@ -612,7 +642,7 @@ export async function handleCablePurchase(req, res) {
     createdAt: nowIso,
   };
 
-  await recordTransaction(tx);
+  await recordTransaction(tx, userToken);
 
   if (!dispatchSuccess) {
     return res.status(400).json({
@@ -637,10 +667,11 @@ export async function handleCablePurchase(req, res) {
 export async function handleExamPurchase(req, res) {
   if (req.method !== 'POST') return res.status(405).json({ error: 'Method not allowed' });
 
+  const userToken = extractBearerToken(req);
   const body = req.body || {};
   const { examPinId, quantity = 1, recipientPhone, pin } = body;
 
-  const user = await getUser(req);
+  const user = await getUser(req, userToken);
   if (!user) return res.status(401).json({ error: 'User not authenticated. Please log in.' });
 
   const userPin = String(user.transactionPin || '1234').trim();
@@ -662,7 +693,7 @@ export async function handleExamPurchase(req, res) {
     });
   }
 
-  const { apiKey, baseUrl } = await getVTUGatewayConfig();
+  const { apiKey, baseUrl } = await getVTUGatewayConfig(userToken);
   if (!apiKey) {
     return res.status(503).json({
       success: false,
@@ -671,10 +702,14 @@ export async function handleExamPurchase(req, res) {
   }
 
   const newBalance = currentBalance - totalCost;
-  await updateFirestoreUser(user.id, {
-    walletBalance: newBalance,
-    totalTransactionsCount: (user.totalTransactionsCount || 0) + 1,
-  });
+  await updateFirestoreUser(
+    user.id,
+    {
+      walletBalance: newBalance,
+      totalTransactionsCount: (user.totalTransactionsCount || 0) + 1,
+    },
+    userToken
+  );
 
   const reference = `NDS-EXM-${Date.now()}-${Math.floor(100 + Math.random() * 900)}`;
   const nowIso = new Date().toISOString();
@@ -709,10 +744,14 @@ export async function handleExamPurchase(req, res) {
   }
 
   if (!dispatchSuccess) {
-    await updateFirestoreUser(user.id, {
-      walletBalance: currentBalance,
-      totalTransactionsCount: user.totalTransactionsCount || 0,
-    });
+    await updateFirestoreUser(
+      user.id,
+      {
+        walletBalance: currentBalance,
+        totalTransactionsCount: user.totalTransactionsCount || 0,
+      },
+      userToken
+    );
   }
 
   const tx = {
@@ -737,7 +776,7 @@ export async function handleExamPurchase(req, res) {
     createdAt: nowIso,
   };
 
-  await recordTransaction(tx);
+  await recordTransaction(tx, userToken);
 
   if (!dispatchSuccess) {
     return res.status(400).json({
@@ -788,17 +827,13 @@ export async function handleSupportTickets(req, res) {
   const userId = req.headers['x-user-id'];
   if (!userId) return res.status(401).json({ error: 'Authentication required' });
 
+  const userToken = extractBearerToken(req);
   const url = req.url || '';
+
   if (req.method === 'GET') {
     try {
-      const fRes = await fetch(`${FIRESTORE_BASE}/supportTickets?key=${FIRESTORE_KEY}&pageSize=50`);
-      let tickets = [];
-      if (fRes.ok) {
-        const data = await fRes.json();
-        tickets = (data.documents || [])
-          .map(unwrapFirestoreDoc)
-          .filter(t => t && t.userId === userId);
-      }
+      const qRes = await fsRunQuery('supportTickets', [{ field: 'userId', value: userId }], 50, userToken);
+      const tickets = qRes.ok ? qRes.documents : [];
       return res.status(200).json({ success: true, tickets });
     } catch {
       return res.status(200).json({ success: true, tickets: [] });
@@ -816,10 +851,10 @@ export async function handleSupportTickets(req, res) {
         return res.status(400).json({ error: 'Ticket ID and message are required' });
       }
       try {
-        const tRes = await fetch(`${FIRESTORE_BASE}/supportTickets/${encodeURIComponent(ticketId)}?key=${FIRESTORE_KEY}`);
-        if (!tRes.ok) return res.status(404).json({ error: 'Ticket not found' });
-        const ticket = unwrapFirestoreDoc(await tRes.json());
-        if (!ticket || ticket.userId !== userId) {
+        const tRes = await fsGetDoc(`supportTickets/${ticketId}`, userToken);
+        if (!tRes.ok || !tRes.data) return res.status(404).json({ error: 'Ticket not found' });
+        const ticket = tRes.data;
+        if (ticket.userId !== userId) {
           return res.status(403).json({ error: 'Unauthorized ticket access' });
         }
         const messages = Array.isArray(ticket.messages) ? [...ticket.messages] : [];
@@ -830,18 +865,14 @@ export async function handleSupportTickets(req, res) {
           message: String(body.message),
           timestamp: nowIso,
         });
-        await fetch(`${FIRESTORE_BASE}/supportTickets/${encodeURIComponent(ticketId)}?key=${FIRESTORE_KEY}`, {
-          method: 'PATCH',
-          headers: { 'Content-Type': 'application/json' },
-          body: JSON.stringify(wrapFirestoreDoc({ ...ticket, messages, updatedAt: nowIso })),
-        });
+        await fsPatchDoc(`supportTickets/${ticketId}`, { messages, updatedAt: nowIso }, ['messages', 'updatedAt'], userToken);
         return res.status(200).json({ success: true, ticket: { ...ticket, messages, updatedAt: nowIso } });
       } catch (err) {
         return res.status(500).json({ error: err.message || 'Reply failed' });
       }
     }
 
-    const user = await getUser(req);
+    const user = await getUser(req, userToken);
     const ticketId = `tkt_${Date.now()}`;
     const ticket = {
       id: ticketId,
@@ -865,14 +896,7 @@ export async function handleSupportTickets(req, res) {
       updatedAt: nowIso,
     };
 
-    try {
-      await fetch(`${FIRESTORE_BASE}/supportTickets/${encodeURIComponent(ticketId)}?key=${FIRESTORE_KEY}`, {
-        method: 'PATCH',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify(wrapFirestoreDoc(ticket)),
-      });
-    } catch {}
-
+    await fsCreateDoc('supportTickets', ticketId, ticket, userToken).catch(() => null);
     return res.status(200).json({ success: true, ticket });
   }
 

@@ -17,6 +17,7 @@ import {
   Send
 } from 'lucide-react';
 import { VirtualAccount, ManualFundingConfig } from '../types/index.ts';
+import { apiFetch } from '../lib/firebase.ts';
 import { getUser, updateUser } from '../lib/firebaseService.ts';
 import { hapticSuccess, hapticNavClick } from '../lib/haptics.ts';
 
@@ -76,7 +77,7 @@ export const FundWalletModal: React.FC<FundWalletModalProps> = ({
 
   const fetchManualConfig = async () => {
     try {
-      const res = await fetch('/api/wallet/manual-fund/config');
+      const res = await apiFetch('/api/wallet/manual-fund/config');
       const data = await res.json().catch(() => ({}));
       if (data && data.config) {
         setManualConfig(data.config);
@@ -100,7 +101,7 @@ export const FundWalletModal: React.FC<FundWalletModalProps> = ({
       }
 
       // 2. Fetch from backend API to ensure memory and Firestore consistency
-      const res = await fetch('/api/wallet/virtual-account', {
+      const res = await apiFetch('/api/wallet/virtual-account', {
         headers: userId ? { 'x-user-id': userId } : {},
       }).catch(() => null);
 
@@ -146,7 +147,7 @@ export const FundWalletModal: React.FC<FundWalletModalProps> = ({
     setSuccessMessage(null);
 
     try {
-      const res = await fetch('/api/wallet/manual-fund/submit', {
+      const res = await apiFetch('/api/wallet/manual-fund/submit', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -213,7 +214,7 @@ export const FundWalletModal: React.FC<FundWalletModalProps> = ({
     setErrorMessage(null);
 
     try {
-      const res = await fetch('/api/wallet/virtual-account/generate', {
+      const res = await apiFetch('/api/wallet/virtual-account/generate', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -321,7 +322,7 @@ export const FundWalletModal: React.FC<FundWalletModalProps> = ({
     setErrorMessage(null);
 
     try {
-      const initRes = await fetch('/api/wallet/fund/initiate', {
+      const initRes = await apiFetch('/api/wallet/fund/initiate', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -332,7 +333,7 @@ export const FundWalletModal: React.FC<FundWalletModalProps> = ({
       const initData = await initRes.json().catch(() => ({}));
       if (!initRes.ok) throw new Error(initData?.error || 'Initiation failed');
 
-      const verifyRes = await fetch('/api/wallet/fund/verify', {
+      const verifyRes = await apiFetch('/api/wallet/fund/verify', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

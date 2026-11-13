@@ -870,6 +870,25 @@ app.post('/api/notifications/fcm-send', (req: Request, res: Response) => {
   });
 });
 
+// ==================== HEALTH CHECK ====================
+app.get('/api/health', async (_req: Request, res: Response) => {
+  try {
+    const snap = await getDocs(collection(firestoreDb, 'dataPlans')).catch(() => null);
+    res.json({
+      success: Boolean(snap),
+      firestoreConnected: Boolean(snap),
+      publicCatalogCount: snap ? snap.size : 0,
+      serviceAccountConfigured: Boolean(process.env.FIREBASE_SERVICE_ACCOUNT_KEY || process.env.FIREBASE_CLIENT_EMAIL),
+    });
+  } catch (err: any) {
+    res.status(200).json({
+      success: false,
+      firestoreConnected: false,
+      firestoreError: err?.message || 'Firestore check failed',
+    });
+  }
+});
+
 // ==================== SYSTEM SETTINGS ====================
 app.get('/api/settings', (req: Request, res: Response) => {
   res.json({ settings: db.settings });

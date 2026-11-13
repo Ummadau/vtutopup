@@ -1,8 +1,6 @@
 // Vercel Serverless Function: Generate Virtual Account
-import { findUserByIdentifier, updateFirestoreUser } from '../../auth/_auth_helpers.js';
-
-const FIRESTORE_BASE = 'https://firestore.googleapis.com/v1/projects/gen-lang-client-0376919977/databases/ai-studio-naeemdatasub-8bb16184-21be-4bcb-bf84-6a9163fbd9db/documents';
-const FIRESTORE_KEY = 'AIzaSyBqaJeymaKiXVij6eypZQJFgK2dOH5CoTA';
+import { findUserByIdentifier, updateFirestoreUser, extractBearerToken } from '../../auth/_auth_helpers.js';
+import { fsGetDoc } from '../../_firestore.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -26,20 +24,20 @@ export default async function handler(req, res) {
     if (!userId) {
       return res.status(401).json({ error: 'Authentication required to generate a virtual account' });
     }
+    const userToken = extractBearerToken(req);
     const bank = String(body.bank || 'UNITYBILLS').toUpperCase();
-    const idType = body.idType || 'nin';
     const idNumber = body.idNumber || '';
 
     // 1. Fetch authenticated user from Firestore
-    const user = await findUserByIdentifier(userId);
+    const user = await findUserByIdentifier(userId, userToken);
     if (!user) {
-      return res.status(404).json({ error: 'User account not found' });
+      return res.status(404).json({ error: 'User account not found in database' });
     }
 
     const currentAccounts = Array.isArray(user.virtualAccounts) ? [...user.virtualAccounts] : [];
 
     // Check if account for this bank already exists
-    const existing = currentAccounts.find(a => 
+    const existing = currentAccounts.find(a =>
       (bank === 'PALMPAY' && a.bankName.toLowerCase().includes('palmpay')) ||
       (bank === 'PROVIDUS' && a.bankName.toLowerCase().includes('providus')) ||
       (bank === 'SAFEHAVEN' && a.bankName.toLowerCase().includes('safehaven')) ||
@@ -89,38 +87,35 @@ export default async function handler(req, res) {
       try {
         let apiKey = process.env.UNITYBILLS_API_KEY || '';
         if (!apiKey) {
-          const cfgRes = await fetch(`${FIRESTORE_BASE}/systemSettings/unitybills_config?key=${FIRESTORE_KEY}`);
-          if (cfgRes.ok) {
-            const cfgData = await cfgRes.json();
-            apiKey = cfgData.fields?.apiKey?.stringValue || '';
-          }
+          const cfgRes = await fsGetDoc('systemSettings/unitybills_config', userToken);
+          apiKey = cfgRes.data?.apiKey || '';
         }
         if (apiKey && apiKey.length > 10) {
           const authHeader = apiKey.toLowerCase().startsWith('token') ? apiKey : `Token ${apiKey}`;
           const ubRes = await fetch('https://unitybills.ng/virtual-account', {
-              method: 'POST',
-              headers: {
-                'Authorization': authHeader,
-                'Content-Type': 'application/json',
-                'Accept': 'application/json',
-              },
-              body: JSON.stringify({
-                firstname: (user.name || 'User').split(' ')[0],
-                lastname: (user.name || 'User').split(' ')[1] || 'Customer',
-                email: user.email || 'customer@vtutopup.ng',
-                phone: user.phone || '08012345678',
-                nin: idNumber || '12345678901',
-              }),
-            });
-            if (ubRes.ok) {
-              const ubData = await ubRes.json().catch(() => null);
-              if (ubData && (ubData.accountNumber || ubData.data?.accountNumber)) {
-                accountNumber = ubData.accountNumber || ubData.data?.accountNumber;
-                if (ubData.accountName || ubData.data?.accountName) {
-                  accountName = ubData.accountName || ubData.data?.accountName;
-                }
+            method: 'POST',
+            headers: {
+              'Authorization': authHeader,
+              'Content-Type': 'application/json',
+              'Accept': 'application/json',
+            },
+            body: JSON.stringify({
+              firstname: (user.name || 'User').split(' ')[0],
+              lastname: (user.name || 'User').split(' ')[1] || 'Customer',
+              email: user.email || 'customer@vtutopup.ng',
+              phone: user.phone || '08012345678',
+              nin: idNumber || '12345678901',
+            }),
+          });
+          if (ubRes.ok) {
+            const ubData = await ubRes.json().catch(() => null);
+            if (ubData && (ubData.accountNumber || ubData.data?.accountNumber)) {
+              accountNumber = ubData.accountNumber || ubData.data?.accountNumber;
+              if (ubData.accountName || ubData.data?.accountName) {
+                accountName = ubData.accountName || ubData.data?.accountName;
               }
             }
+          }
         }
       } catch (ubErr) {
         console.warn('Virtual account reservation note:', ubErr);
@@ -138,10 +133,14 @@ export default async function handler(req, res) {
 
     // 3. Update user in Firestore
     currentAccounts.push(createdAccount);
-    await updateFirestoreUser(user.id, {
-      virtualAccounts: currentAccounts,
-      updatedAt: new Date().toISOString(),
-    }).catch(e => console.warn('User update error:', e));
+    await updateFirestoreUser(
+      user.id,
+      {
+        virtualAccounts: currentAccounts,
+        updatedAt: new Date().toISOString(),
+      },
+      userToken
+    ).catch(e => console.warn('User update error:', e));
 
     return res.status(200).json({
       success: true,

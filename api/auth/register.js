@@ -1,6 +1,7 @@
 import {
   findUserByIdentifier,
   createFirestoreUser,
+  extractBearerToken,
   normalizePhone,
   hashPassword,
   sanitizeUser,
@@ -32,11 +33,14 @@ export default async function handler(req, res) {
       return res.status(400).json({ error: 'Password must be at least 6 characters' });
     }
 
+    const userToken = extractBearerToken(req);
     const cleanEmail = String(email).trim().toLowerCase();
     const cleanPhone = normalizePhone(phone);
 
     // Check if user already exists
-    const existing = (await findUserByIdentifier(cleanEmail)) || (await findUserByIdentifier(cleanPhone));
+    const existing =
+      (await findUserByIdentifier(cleanEmail, userToken)) ||
+      (await findUserByIdentifier(cleanPhone, userToken));
     if (existing) {
       return res.status(400).json({ error: 'An account with this email or phone number already exists' });
     }
@@ -69,7 +73,15 @@ export default async function handler(req, res) {
       virtualAccounts: [],
     };
 
-    await createFirestoreUser(newUser);
+    const writeResult = await createFirestoreUser(newUser, userToken);
+    if (!writeResult.ok) {
+      return res.status(503).json({
+        error:
+          writeResult.status === 403
+            ? 'Database permission denied: configure FIREBASE_SERVICE_ACCOUNT_KEY in Vercel Environment Variables or sign in with Google.'
+            : `Unable to save account to database: ${writeResult.error || 'Firestore write failed'}`,
+      });
+    }
 
     return res.status(200).json({ success: true, user: sanitizeUser(newUser) });
   } catch (err) {

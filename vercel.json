@@ -2,6 +2,11 @@
   "version": 2,
   "buildCommand": "npm install --legacy-peer-deps && npm run build",
   "installCommand": "npm install --legacy-peer-deps",
+  "functions": {
+    "api/**/*.js": {
+      "includeFiles": "{firebase-applet-config.json,server/persisted_db.json}"
+    }
+  },
   "rewrites": [
     {
       "source": "/hooks/deposits",

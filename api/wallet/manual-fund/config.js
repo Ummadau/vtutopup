@@ -1,6 +1,5 @@
 // Vercel Serverless Function: Manual Funding Config
-const FIRESTORE_BASE = 'https://firestore.googleapis.com/v1/projects/gen-lang-client-0376919977/databases/ai-studio-naeemdatasub-8bb16184-21be-4bcb-bf84-6a9163fbd9db/documents';
-const FIRESTORE_KEY = 'AIzaSyBqaJeymaKiXVij6eypZQJFgK2dOH5CoTA';
+import { extractBearerToken, fsGetDoc } from '../../_firestore.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -14,20 +13,22 @@ export default async function handler(req, res) {
     bankName: 'Opay Digital Services',
     accountNumber: '8069417241',
     accountName: 'NAIM UMMADAU HARUNA',
-    instruction: 'Transfer the exact amount to the account above and enter your sender name and payment reference for instant manual approval.',
+    supportWhatsapp: '+2348069417241',
+    instructions: 'Transfer the exact amount to the account above and enter your sender name and payment reference for instant manual approval.',
     isEnabled: true,
   };
 
   try {
-    const fsRes = await fetch(`${FIRESTORE_BASE}/systemSettings/manual_funding_config?key=${FIRESTORE_KEY}`);
-    if (fsRes.ok) {
-      const data = await fsRes.json();
-      if (data.fields) {
-        defaultConfig.bankName = data.fields.bankName?.stringValue || defaultConfig.bankName;
-        defaultConfig.accountNumber = data.fields.accountNumber?.stringValue || defaultConfig.accountNumber;
-        defaultConfig.accountName = data.fields.accountName?.stringValue || defaultConfig.accountName;
-        defaultConfig.instruction = data.fields.instruction?.stringValue || defaultConfig.instruction;
-      }
+    const userToken = extractBearerToken(req);
+    const cfgRes = await fsGetDoc('settings/manual_funding', userToken);
+    const sysRes = !cfgRes.ok ? await fsGetDoc('systemSettings/manual_funding_config', userToken) : null;
+    const live = cfgRes.data || sysRes?.data;
+    if (live) {
+      defaultConfig.bankName = live.bankName || defaultConfig.bankName;
+      defaultConfig.accountNumber = live.accountNumber || defaultConfig.accountNumber;
+      defaultConfig.accountName = live.accountName || defaultConfig.accountName;
+      defaultConfig.supportWhatsapp = live.supportWhatsapp || defaultConfig.supportWhatsapp;
+      defaultConfig.instructions = live.instructions || live.instruction || defaultConfig.instructions;
     }
   } catch {}
 

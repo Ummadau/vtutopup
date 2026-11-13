@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ArrowLeft, Zap, Tv, GraduationCap, CheckCircle2, AlertCircle, ShieldCheck, Search, Copy, Check } from 'lucide-react';
 import { collection, getDocs } from 'firebase/firestore';
-import { firestoreDb } from '../lib/firebase.ts';
+import { firestoreDb, apiFetch } from '../lib/firebase.ts';
 import { updateWalletBalance } from '../lib/firebaseService.ts';
 import { PinModal } from './PinModal.tsx';
 import { ElectricityDisco, CablePackage, ExamPin, Transaction } from '../types/index.ts';
@@ -89,7 +89,7 @@ export const PayBillsModal: React.FC<PayBillsModalProps> = ({
 
       if (list.length === 0) {
         try {
-          const res = await fetch('/api/services/electricity/discos').catch(() => null);
+          const res = await apiFetch('/api/services/electricity/discos').catch(() => null);
           if (res && res.ok) {
             const d = await res.json().catch(() => ({}));
             if (d && Array.isArray(d.discos) && d.discos.length > 0) list = d.discos;
@@ -121,7 +121,7 @@ export const PayBillsModal: React.FC<PayBillsModalProps> = ({
 
       if (list.length === 0) {
         try {
-          const res = await fetch('/api/services/exam/pins').catch(() => null);
+          const res = await apiFetch('/api/services/exam/pins').catch(() => null);
           if (res && res.ok) {
             const d = await res.json().catch(() => ({}));
             if (d && Array.isArray(d.pins) && d.pins.length > 0) list = d.pins;
@@ -159,7 +159,7 @@ export const PayBillsModal: React.FC<PayBillsModalProps> = ({
 
         if (list.length === 0) {
           try {
-            const res = await fetch(`/api/services/cable/packages?provider=${selectedCategory}`).catch(() => null);
+            const res = await apiFetch(`/api/services/cable/packages?provider=${selectedCategory}`).catch(() => null);
             if (res && res.ok) {
               const d = await res.json().catch(() => ({}));
               if (d && Array.isArray(d.packages) && d.packages.length > 0) list = d.packages;
@@ -189,7 +189,7 @@ export const PayBillsModal: React.FC<PayBillsModalProps> = ({
     setVerifyingMeter(true);
     setErrorMessage(null);
     try {
-      const res = await fetch('/api/services/electricity/verify-meter', {
+      const res = await apiFetch('/api/services/electricity/verify-meter', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -243,7 +243,7 @@ export const PayBillsModal: React.FC<PayBillsModalProps> = ({
     const discoNetworkId = disco?.network_id || disco?.networkId || disco?.code || selectedDiscoId;
 
     try {
-      const res = await fetch('/api/services/electricity/purchase', {
+      const res = await apiFetch('/api/services/electricity/purchase', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -358,7 +358,7 @@ export const PayBillsModal: React.FC<PayBillsModalProps> = ({
     setVerifyingCard(true);
     setErrorMessage(null);
     try {
-      const res = await fetch('/api/services/cable/verify-card', {
+      const res = await apiFetch('/api/services/cable/verify-card', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
@@ -406,7 +406,7 @@ export const PayBillsModal: React.FC<PayBillsModalProps> = ({
     const cableNetworkId = pkg?.network_id || pkg?.networkId || selectedCategory;
 
     try {
-      const res = await fetch('/api/services/cable/purchase', {
+      const res = await apiFetch('/api/services/cable/purchase', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -538,7 +538,7 @@ export const PayBillsModal: React.FC<PayBillsModalProps> = ({
     const examNetworkId = epin?.network_id || epin?.networkId || epin?.exam || selectedCategory;
 
     try {
-      const res = await fetch('/api/services/exam/purchase', {
+      const res = await apiFetch('/api/services/exam/purchase', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

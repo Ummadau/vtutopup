@@ -1,7 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ArrowLeft, Phone, AlertCircle, Sparkles, ShieldCheck } from 'lucide-react';
 import { collection, getDocs } from 'firebase/firestore';
-import { firestoreDb } from '../lib/firebase.ts';
+import { firestoreDb, apiFetch } from '../lib/firebase.ts';
 import { NetworkBadge } from './NetworkBadge.tsx';
 import { PinModal } from './PinModal.tsx';
 import { NetworkType, Transaction, UserRole } from '../types/index.ts';
@@ -56,7 +56,7 @@ export const BuyAirtimeModal: React.FC<BuyAirtimeModalProps> = ({
     const loadDiscounts = async () => {
       let loaded = false;
       try {
-        const res = await fetch('/api/services/airtime/discounts');
+        const res = await apiFetch('/api/services/airtime/discounts');
         const data = await res.json().catch(() => ({}));
         if (data && data.discounts && Array.isArray(data.discounts) && data.discounts.length > 0) {
           const map: Record<string, { customer: number; reseller: number; plan_id?: string }> = {};
@@ -99,7 +99,7 @@ export const BuyAirtimeModal: React.FC<BuyAirtimeModalProps> = ({
   useEffect(() => {
     const clean = phone.replace(/\D/g, '');
     if (clean.length >= 4) {
-      fetch(`/api/services/detect-network?phone=${clean}`)
+      apiFetch(`/api/services/detect-network?phone=${clean}`)
         .then(res => res.ok ? res.json().catch(() => ({})) : {})
         .then((data: any) => {
           if (data && data.network) {
@@ -158,7 +158,7 @@ export const BuyAirtimeModal: React.FC<BuyAirtimeModalProps> = ({
 
     try {
       const activePlanId = currentNetworkDiscount?.plan_id;
-      const res = await fetch('/api/services/airtime/purchase', {
+      const res = await apiFetch('/api/services/airtime/purchase', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

@@ -2,6 +2,7 @@
  * Robust fetch wrapper that checks HTTP headers and body content
  * to handle server errors, 404 HTML pages, and non-JSON payloads gracefully.
  */
+import { apiFetch } from './firebase.ts';
 
 export interface SafeFetchResponse<T = any> {
   ok: boolean;
@@ -17,7 +18,7 @@ export async function safeFetchJson<T = any>(
   fallback: Partial<T> = {}
 ): Promise<T & { _safeError?: string; _statusCode?: number }> {
   try {
-    const res = await fetch(input, init);
+    const res = await apiFetch(input, init);
     const contentType = res.headers.get('content-type') || '';
     const isJsonHeader = contentType.includes('application/json');
 
@@ -78,7 +79,7 @@ export async function safeFetch<T = any>(
   options?: RequestInit
 ): Promise<SafeFetchResponse<T>> {
   try {
-    const res = await fetch(url, options);
+    const res = await apiFetch(url, options);
     const contentType = res.headers.get('content-type') || '';
     const text = await res.text();
     const trimmed = text.trim();

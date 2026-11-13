@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { DollarSign, TrendingUp, Users, Award, ShieldCheck, Copy, Check, ArrowUpRight, Zap, RefreshCw, Key, Code2 } from 'lucide-react';
 import { User, DataPlan } from '../types/index.ts';
+import { apiFetch } from '../lib/firebase.ts';
 
 interface ResellerDashboardProps {
   user: User;
@@ -30,7 +31,7 @@ export const ResellerDashboard: React.FC<ResellerDashboardProps> = ({
   const [apiKey] = useState(`NDS_RES_${user.referralCode}_${Date.now().toString().slice(-6)}`);
 
   useEffect(() => {
-    fetch('/api/reseller/stats', {
+    apiFetch('/api/reseller/stats', {
       headers: { 'x-user-id': user.id },
     })
       .then(res => res.ok ? res.json().catch(() => ({})) : {})
@@ -39,7 +40,7 @@ export const ResellerDashboard: React.FC<ResellerDashboardProps> = ({
       })
       .catch(() => {});
 
-    fetch('/api/admin/data-plans')
+    apiFetch('/api/admin/data-plans')
       .then(res => res.ok ? res.json().catch(() => ({})) : {})
       .then((data: any) => {
         if (data && data.plans) setPlans(data.plans);

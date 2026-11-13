@@ -16,7 +16,7 @@ import {
   sendPasswordResetEmail
 } from 'firebase/auth';
 import { collection, query, where, getDocs } from 'firebase/firestore';
-import { auth, firestoreDb } from '../lib/firebase.ts';
+import { auth, firestoreDb, apiFetch } from '../lib/firebase.ts';
 import { syncUserToFirestore, setUser } from '../lib/firebaseService.ts';
 import { Logo } from './Logo.tsx';
 import { User } from '../types/index.ts';
@@ -109,7 +109,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       // 2. Synchronize with backend API
       let registeredUser: User | null = null;
       try {
-        const res = await fetch('/api/auth/register', {
+        const res = await apiFetch('/api/auth/register', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ name, phone, email: cleanEmail, password, referralCode, uid: fbUid }),
@@ -198,7 +198,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       // 2. Verify with backend API
       let authedUser: User | null = null;
       try {
-        const res = await fetch('/api/auth/login', {
+        const res = await apiFetch('/api/auth/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ identifier: cleanIdentifier, password: loginPassword }),
@@ -304,7 +304,7 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       // Verify token with backend API
       let userObj: User | null = null;
       try {
-        const res = await fetch('/api/auth/login', {
+        const res = await apiFetch('/api/auth/login', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ identifier: cleanEmail, idToken }),
@@ -352,7 +352,13 @@ export const AuthModal: React.FC<AuthModalProps> = ({
       onAuthSuccess(userObj);
       onClose();
     } catch (err: any) {
-      setErrorMessage(err.message || 'Google authentication failed');
+      if (err?.code === 'auth/unauthorized-domain' && typeof window !== 'undefined') {
+        setErrorMessage(
+          `Domain "${window.location.hostname}" is not authorized for Google Sign-In yet. Add it in Firebase Console → Authentication → Settings → Authorized domains.`
+        );
+      } else {
+        setErrorMessage(err?.message || 'Google authentication failed');
+      }
     } finally {
       setLoading(false);
     }

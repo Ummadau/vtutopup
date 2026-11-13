@@ -22,3 +22,32 @@ export async function testConnection() {
 if (typeof window !== 'undefined') {
   testConnection();
 }
+
+/**
+ * Authenticated fetch wrapper that attaches the active Firebase ID Token
+ * on same-origin /api/* requests without mutating global window.fetch.
+ */
+export async function apiFetch(input: RequestInfo | URL, init?: RequestInit): Promise<Response> {
+  try {
+    const urlStr = typeof input === 'string' ? input : input instanceof URL ? input.href : input.url;
+    const isLocalApi =
+      urlStr.startsWith('/api/') ||
+      (typeof window !== 'undefined' &&
+        typeof window.location?.origin === 'string' &&
+        urlStr.startsWith(`${window.location.origin}/api/`));
+
+    if (isLocalApi && auth.currentUser) {
+      const headers = new Headers(init?.headers || (input instanceof Request ? input.headers : undefined));
+      if (!headers.has('Authorization')) {
+        const token = await auth.currentUser.getIdToken().catch(() => null);
+        if (token) {
+          headers.set('Authorization', `Bearer ${token}`);
+        }
+      }
+      return fetch(input, { ...init, headers });
+    }
+  } catch {
+    // Fall through cleanly to native fetch
+  }
+  return fetch(input, init);
+}

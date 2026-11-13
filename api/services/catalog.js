@@ -1,6 +1,7 @@
-// Vercel Serverless Function - Services & Catalog Provider
+// Vercel Serverless Function - Live Firestore + Fallback Catalog Provider
 import fs from 'fs';
 import path from 'path';
+import { extractBearerToken, fsGetDoc, fsRunQuery } from '../_firestore.js';
 
 let catalogCache = null;
 
@@ -17,7 +18,6 @@ function loadCatalog() {
     console.warn('Could not load persisted_db.json, using defaults:', err.message);
   }
 
-  // Fallback default catalog
   catalogCache = {
     dataPlans: [
       { id: 'mtn_sme_500mb', name: 'MTN SME Data', network: 'mtn', size: '500MB', validity: '30 Days', customerPrice: 170, resellerPrice: 155, planType: 'SME', isActive: true, plan_id: '304', planCode: '304' },
@@ -67,6 +67,7 @@ function loadCatalog() {
       { id: 'nabteb', examType: 'NABTEB', name: 'NABTEB Result Checker Pin', price: 1500, quantityAvailable: 150, isActive: true },
     ],
     settings: {
+      platformName: 'NPay',
       siteName: 'NPay',
       supportEmail: 'naeemummadau@gmail.com',
       supportPhone: '+2348069417241',
@@ -103,20 +104,33 @@ export function detectNetwork(phone) {
   return null;
 }
 
-export function handleDataPlans(req, res) {
-  const catalog = loadCatalog();
+export async function handleDataPlans(req, res) {
   const urlObj = new URL(req.url, 'http://localhost');
   const network = urlObj.searchParams.get('network');
-  let plans = catalog.dataPlans || [];
+  let plans = [];
+
+  const liveRes = await fsRunQuery('dataPlans', [], 300).catch(() => null);
+  if (liveRes?.ok && liveRes.documents.length > 0) {
+    plans = liveRes.documents.filter(p => p.isActive !== false);
+  } else {
+    plans = loadCatalog().dataPlans || [];
+  }
+
   if (network) {
     plans = plans.filter(p => (p.network || '').toLowerCase() === network.toLowerCase());
   }
   return res.status(200).json({ success: true, plans });
 }
 
-export function handleAirtimeDiscounts(req, res) {
-  const catalog = loadCatalog();
-  return res.status(200).json({ success: true, discounts: catalog.airtimeDiscounts || [] });
+export async function handleAirtimeDiscounts(req, res) {
+  let discounts = [];
+  const liveRes = await fsRunQuery('airtimeDiscounts', [], 50).catch(() => null);
+  if (liveRes?.ok && liveRes.documents.length > 0) {
+    discounts = liveRes.documents;
+  } else {
+    discounts = loadCatalog().airtimeDiscounts || [];
+  }
+  return res.status(200).json({ success: true, discounts });
 }
 
 export function handleDetectNetwork(req, res) {
@@ -126,30 +140,52 @@ export function handleDetectNetwork(req, res) {
   return res.status(200).json({ success: true, network });
 }
 
-export function handleElectricityDiscos(req, res) {
-  const catalog = loadCatalog();
-  return res.status(200).json({ success: true, discos: catalog.electricityDiscos || [] });
+export async function handleElectricityDiscos(req, res) {
+  let discos = [];
+  const liveRes = await fsRunQuery('electricityDiscos', [], 50).catch(() => null);
+  if (liveRes?.ok && liveRes.documents.length > 0) {
+    discos = liveRes.documents.filter(d => d.isActive !== false);
+  } else {
+    discos = loadCatalog().electricityDiscos || [];
+  }
+  return res.status(200).json({ success: true, discos });
 }
 
-export function handleCablePackages(req, res) {
-  const catalog = loadCatalog();
+export async function handleCablePackages(req, res) {
   const urlObj = new URL(req.url, 'http://localhost');
   const provider = urlObj.searchParams.get('provider');
-  let packages = catalog.cablePackages || [];
+  let packages = [];
+
+  const liveRes = await fsRunQuery('cablePackages', [], 200).catch(() => null);
+  if (liveRes?.ok && liveRes.documents.length > 0) {
+    packages = liveRes.documents.filter(p => p.isActive !== false);
+  } else {
+    packages = loadCatalog().cablePackages || [];
+  }
+
   if (provider) {
     packages = packages.filter(p => (p.provider || '').toLowerCase() === provider.toLowerCase());
   }
   return res.status(200).json({ success: true, packages });
 }
 
-export function handleExamPins(req, res) {
-  const catalog = loadCatalog();
-  return res.status(200).json({ success: true, pins: catalog.examPins || [] });
+export async function handleExamPins(req, res) {
+  let pins = [];
+  const liveRes = await fsRunQuery('examPins', [], 50).catch(() => null);
+  if (liveRes?.ok && liveRes.documents.length > 0) {
+    pins = liveRes.documents.filter(p => p.isActive !== false);
+  } else {
+    pins = loadCatalog().examPins || [];
+  }
+  return res.status(200).json({ success: true, pins });
 }
 
-export function handleSettings(req, res) {
-  const catalog = loadCatalog();
-  return res.status(200).json({ success: true, settings: catalog.settings || {} });
+export async function handleSettings(req, res) {
+  const userToken = extractBearerToken(req);
+  const liveGeneral = await fsGetDoc('systemSettings/general', userToken).catch(() => null);
+  const livePlatform = !liveGeneral?.ok ? await fsGetDoc('systemSettings/platform_settings', userToken).catch(() => null) : null;
+  const settings = liveGeneral?.data || livePlatform?.data || loadCatalog().settings || {};
+  return res.status(200).json({ success: true, settings });
 }
 
 export function handleWalletSummary(req, res) {

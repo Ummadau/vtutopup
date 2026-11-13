@@ -4,6 +4,7 @@ import {
   verifyPassword,
   verifyFirebaseIdToken,
   verifyFirebasePassword,
+  extractBearerToken,
   sanitizeUser,
   SUPER_ADMIN_USER,
 } from './_auth_helpers.js';
@@ -38,6 +39,7 @@ export default async function handler(req, res) {
     }
 
     const clean = String(identifier).trim().toLowerCase();
+    let userToken = idToken || extractBearerToken(req);
 
     // Verify Google / Firebase ID token if supplied
     let verifiedToken = null;
@@ -53,13 +55,17 @@ export default async function handler(req, res) {
       const adminSecret = process.env.ADMIN_DEFAULT_PASSWORD || 'naeem1234';
       const isGoogleAdmin = verifiedToken && verifiedToken.email === 'naeemummadau@gmail.com';
       if (isGoogleAdmin || password === adminSecret) {
-        return res.status(200).json({ success: true, user: sanitizeUser(SUPER_ADMIN_USER) });
+        const liveAdmin = await findUserByIdentifier('usr_admin_01', userToken);
+        return res.status(200).json({ success: true, user: sanitizeUser(liveAdmin || SUPER_ADMIN_USER) });
       }
       return res.status(401).json({ error: 'Incorrect administrator password' });
     }
 
-    // 2. Find in Firestore
-    let user = await findUserByIdentifier(clean);
+    // 2. Find in Firestore (using service account or Firebase ID token)
+    let user = await findUserByIdentifier(clean, userToken);
+    if (!user && verifiedToken?.uid) {
+      user = await findUserByIdentifier(verifiedToken.uid, userToken);
+    }
 
     // 3. Google verified user creation if first-time login
     if (!user) {
@@ -83,10 +89,10 @@ export default async function handler(req, res) {
           updatedAt: new Date().toISOString(),
           virtualAccounts: [],
         };
-        await createFirestoreUser(user);
+        await createFirestoreUser(user, userToken);
         return res.status(200).json({ success: true, user: sanitizeUser(user) });
       }
-      return res.status(404).json({ error: 'No account found with this email or phone number. Please register.' });
+      return res.status(404).json({ error: 'No account found with this email or phone number. Please register or sign in with Google.' });
     }
 
     // 4. Verify password for non-token logins

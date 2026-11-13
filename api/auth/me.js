@@ -1,4 +1,4 @@
-import { findUserByIdentifier, sanitizeUser } from './_auth_helpers.js';
+import { findUserByIdentifier, extractBearerToken, sanitizeUser } from './_auth_helpers.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -13,7 +13,8 @@ export default async function handler(req, res) {
     return res.status(401).json({ error: 'Not authenticated' });
   }
 
-  const user = await findUserByIdentifier(userId);
+  const userToken = extractBearerToken(req);
+  const user = await findUserByIdentifier(userId, userToken);
   if (!user) {
     return res.status(404).json({ error: 'User not found' });
   }

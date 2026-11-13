@@ -1,6 +1,7 @@
 import React, { useState, useEffect } from 'react';
 import { ArrowLeft, MessageCircle, Plus, Send, AlertTriangle, CheckCircle2, Clock } from 'lucide-react';
 import { SupportTicket, Transaction, User } from '../types/index.ts';
+import { apiFetch } from '../lib/firebase.ts';
 
 interface SupportModalProps {
   isOpen: boolean;
@@ -35,7 +36,7 @@ export const SupportModal: React.FC<SupportModalProps> = ({
   const [loading, setLoading] = useState(false);
 
   const fetchTickets = () => {
-    fetch('/api/support/tickets', {
+    apiFetch('/api/support/tickets', {
       headers: { 'x-user-id': user.id },
     })
       .then(res => res.ok ? res.json().catch(() => ({})) : {})
@@ -69,7 +70,7 @@ export const SupportModal: React.FC<SupportModalProps> = ({
     e.preventDefault();
     setLoading(true);
     try {
-      const res = await fetch('/api/support/tickets', {
+      const res = await apiFetch('/api/support/tickets', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -94,7 +95,7 @@ export const SupportModal: React.FC<SupportModalProps> = ({
     e.preventDefault();
     if (!activeTicket || !replyMessage.trim()) return;
     try {
-      const res = await fetch(`/api/support/tickets/${activeTicket.id}/reply`, {
+      const res = await apiFetch(`/api/support/tickets/${activeTicket.id}/reply`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

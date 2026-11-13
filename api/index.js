@@ -1,5 +1,7 @@
 // Master Vercel Serverless Function & API Router
 import { handleUnityBillsWebhookRequest } from './_webhook_handler.js';
+import healthHandler from './health.js';
+import { handleAdminRoutes, handleResellerStats, handleUserReferrals } from './admin.js';
 import loginHandler from './auth/login.js';
 import registerHandler from './auth/register.js';
 import pinLoginHandler from './auth/pin-login.js';
@@ -44,7 +46,12 @@ export default async function handler(req, res) {
 
   if (req.method === 'OPTIONS') return res.status(200).json({ success: true });
 
-  const url = req.url || '';
+  const url = (req.url || '').split('?')[0];
+
+  // 0. Health Check
+  if (url === '/api/health' || url === '/api/firebase-health') {
+    return healthHandler(req, res);
+  }
 
   // 1. Webhook endpoints
   if (url.includes('/webhooks/unitybills') || url.includes('/hooks/deposits') || url.includes('/webhooks/billstack')) {
@@ -85,9 +92,15 @@ export default async function handler(req, res) {
   if (url.includes('/services/electricity/discos')) return handleElectricityDiscos(req, res);
   if (url.includes('/services/cable/packages')) return handleCablePackages(req, res);
   if (url.includes('/services/exam/pins')) return handleExamPins(req, res);
-  if (url.includes('/settings')) return handleSettings(req, res);
+  if (url.includes('/settings')) {
+    if (req.method === 'PUT') return handleAdminRoutes(req, res);
+    return handleSettings(req, res);
+  }
 
-  // 6. Activity & Support endpoints
+  // 6. User, Reseller, Admin & Activity endpoints
+  if (url.includes('/user/referrals')) return handleUserReferrals(req, res);
+  if (url.includes('/reseller/stats')) return handleResellerStats(req, res);
+  if (url.includes('/admin/')) return handleAdminRoutes(req, res);
   if (url.includes('/support/tickets')) return handleSupportTickets(req, res);
   if (url.includes('/transactions')) return transactionsHandler(req, res);
   if (url.includes('/notifications')) return notificationsHandler(req, res);

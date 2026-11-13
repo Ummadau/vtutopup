@@ -3,7 +3,7 @@ import { ArrowLeft, Check, Phone, ShieldCheck, AlertCircle, Sparkles } from 'luc
 import { NetworkBadge } from './NetworkBadge.tsx';
 import { PinModal } from './PinModal.tsx';
 import { collection, getDocs } from 'firebase/firestore';
-import { firestoreDb } from '../lib/firebase.ts';
+import { firestoreDb, apiFetch } from '../lib/firebase.ts';
 import { DataPlan, NetworkType, Transaction, UserRole } from '../types/index.ts';
 import { FALLBACK_DATA_PLANS } from '../constants/defaultCatalogs.ts';
 import { updateWalletBalance } from '../lib/firebaseService.ts';
@@ -53,7 +53,7 @@ export const BuyDataModal: React.FC<BuyDataModalProps> = ({
       let loadedPlans: DataPlan[] = [];
 
       try {
-        const res = await fetch(`/api/services/data/plans?network=${selectedNetwork}`).catch(() => null);
+        const res = await apiFetch(`/api/services/data/plans?network=${selectedNetwork}`).catch(() => null);
         if (res && res.ok) {
           const data = await res.json().catch(() => ({}));
           if (data && Array.isArray(data.plans) && data.plans.length > 0) {
@@ -134,7 +134,7 @@ export const BuyDataModal: React.FC<BuyDataModalProps> = ({
 
     try {
       const activePlanCode = currentPlan?.plan_id || currentPlan?.planCode || selectedPlanId;
-      const res = await fetch('/api/services/data/purchase', {
+      const res = await apiFetch('/api/services/data/purchase', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

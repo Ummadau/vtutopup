@@ -61,7 +61,7 @@ import {
 } from '../types/index.ts';
 import { TransactionStatusBadge } from './TransactionStatusBadge.tsx';
 import { collection, getDocs, doc, getDoc, setDoc, deleteDoc, updateDoc } from 'firebase/firestore';
-import { firestoreDb, auth } from '../lib/firebase.ts';
+import { firestoreDb, auth, apiFetch } from '../lib/firebase.ts';
 
 const isFbAdminSignedIn = (): boolean => {
   const email = (auth.currentUser?.email || '').toLowerCase();
@@ -221,7 +221,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const fetchWebhookLogs = async () => {
     setIsLoadingWebhookLogs(true);
     try {
-      const res = await fetch('/api/admin/webhook-logs', {
+      const res = await apiFetch('/api/admin/webhook-logs', {
         headers: {
           'Accept': 'application/json',
           'x-user-id': currentAdmin?.id || 'usr_ahmad_01',
@@ -371,7 +371,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Safe fetch helper for parallel Promise.all endpoints
   const safeFetchJson = async (url: string, options?: RequestInit, fallback: any = {}) => {
     try {
-      const res = await fetch(url, options);
+      const res = await apiFetch(url, options);
       if (!res.ok) return fallback;
       const data = await res.json().catch(() => fallback);
       return data ?? fallback;
@@ -514,7 +514,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }
 
       // 2. Sync to API if available
-      await fetch('/api/admin/manual-fund/config', {
+      await apiFetch('/api/admin/manual-fund/config', {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -555,7 +555,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }
 
       // 2. Sync to API if available
-      await fetch('/api/admin/manual-fund/approve', {
+      await apiFetch('/api/admin/manual-fund/approve', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -586,7 +586,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setProcessingRequestId(rejectTargetReq.requestId);
     setIsRejecting(true);
     try {
-      const res = await fetch('/api/admin/manual-fund/reject', {
+      const res = await apiFetch('/api/admin/manual-fund/reject', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -629,7 +629,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     setIsSavingBillstack(true);
     try {
-      const res = await fetch('/api/admin/billstack/config', {
+      const res = await apiFetch('/api/admin/billstack/config', {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -659,7 +659,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setIsTestingBillstack(true);
     setBillstackTestResult(null);
     try {
-      const res = await fetch('/api/admin/billstack/ping', {
+      const res = await apiFetch('/api/admin/billstack/ping', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -685,7 +685,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setIsTestingWebhook(true);
     setWebhookTestResult(null);
     try {
-      const res = await fetch('/api/admin/billstack/test-webhook', {
+      const res = await apiFetch('/api/admin/billstack/test-webhook', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -741,7 +741,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     };
 
     try {
-      const res = await fetch('/api/webhooks/unitybills', {
+      const res = await apiFetch('/api/webhooks/unitybills', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -812,7 +812,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
     setIsSavingVtu(true);
     try {
-      const res = await fetch('/api/admin/vtu-naija/config', {
+      const res = await apiFetch('/api/admin/vtu-naija/config', {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -828,7 +828,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
         // Immediately ping the backend to verify the updated credentials
         setIsTestingVtu(true);
         try {
-          const pingRes = await fetch('/api/admin/vtu-naija/ping', {
+          const pingRes = await apiFetch('/api/admin/vtu-naija/ping', {
             method: 'POST',
             headers: {
               'Content-Type': 'application/json',
@@ -868,7 +868,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setIsTestingVtu(true);
     setVtuTestResult(null);
     try {
-      const res = await fetch('/api/admin/vtu-naija/ping', {
+      const res = await apiFetch('/api/admin/vtu-naija/ping', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -909,7 +909,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleSaveServiceRouting = async (newRouting: ServiceRoutingConfig) => {
     setIsSavingRouting(true);
     try {
-      const res = await fetch('/api/admin/gateway/routing', {
+      const res = await apiFetch('/api/admin/gateway/routing', {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -963,7 +963,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     e.preventDefault();
     setIsSavingNcWallet(true);
     try {
-      const res = await fetch('/api/admin/ncwallet/config', {
+      const res = await apiFetch('/api/admin/ncwallet/config', {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -991,7 +991,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setIsTestingNcWallet(true);
     setNcWalletTestResult(null);
     try {
-      const res = await fetch('/api/admin/ncwallet/ping', {
+      const res = await apiFetch('/api/admin/ncwallet/ping', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1023,7 +1023,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     e.preventDefault();
     setIsSavingUnityBills(true);
     try {
-      const res = await fetch('/api/admin/unitybills/config', {
+      const res = await apiFetch('/api/admin/unitybills/config', {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -1051,7 +1051,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     setIsTestingUnityBills(true);
     setUnityBillsTestResult(null);
     try {
-      const res = await fetch('/api/admin/unitybills/ping', {
+      const res = await apiFetch('/api/admin/unitybills/ping', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1119,7 +1119,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }
 
       // 3. Sync to API if available
-      await fetch(`/api/admin/users/${adjustTargetUser.id}/wallet-adjust`, {
+      await apiFetch(`/api/admin/users/${adjustTargetUser.id}/wallet-adjust`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1146,7 +1146,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   // Toggle User Status / Role
   const handleUpdateUserStatus = async (user: User, newStatus: 'active' | 'suspended') => {
     try {
-      const res = await fetch(`/api/admin/users/${user.id}`, {
+      const res = await apiFetch(`/api/admin/users/${user.id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -1165,7 +1165,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
 
   const handleUpgradeToReseller = async (user: User) => {
     try {
-      const res = await fetch(`/api/admin/users/${user.id}`, {
+      const res = await apiFetch(`/api/admin/users/${user.id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -1210,7 +1210,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }
 
       // 2. Sync to API if available
-      await fetch('/api/admin/data-plans', {
+      await apiFetch('/api/admin/data-plans', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1238,7 +1238,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }
 
       // 2. Sync to API if available
-      await fetch(`/api/admin/data-plans/${editingPlan.id}`, {
+      await apiFetch(`/api/admin/data-plans/${editingPlan.id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -1266,7 +1266,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }
 
       // 2. Sync to API if available
-      await fetch(`/api/admin/data-plans/${plan.id}`, {
+      await apiFetch(`/api/admin/data-plans/${plan.id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -1297,7 +1297,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     e.preventDefault();
     if (!editingAirtimeDiscount) return;
     try {
-      const res = await fetch(`/api/admin/airtime-discounts/${editingAirtimeDiscount.network}`, {
+      const res = await apiFetch(`/api/admin/airtime-discounts/${editingAirtimeDiscount.network}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -1322,7 +1322,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleToggleAirtimeActive = async (disc: AirtimeDiscount) => {
     try {
       const updatedStatus = !disc.isActive;
-      const res = await fetch(`/api/admin/airtime-discounts/${disc.network}`, {
+      const res = await apiFetch(`/api/admin/airtime-discounts/${disc.network}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -1343,7 +1343,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleCreateDisco = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const res = await fetch('/api/admin/electricity-discos', {
+      const res = await apiFetch('/api/admin/electricity-discos', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1369,7 +1369,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     e.preventDefault();
     if (!editingDisco) return;
     try {
-      const res = await fetch(`/api/admin/electricity-discos/${editingDisco.id}`, {
+      const res = await apiFetch(`/api/admin/electricity-discos/${editingDisco.id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -1404,7 +1404,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleCreateCable = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const res = await fetch('/api/admin/cable-packages', {
+      const res = await apiFetch('/api/admin/cable-packages', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1430,7 +1430,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     e.preventDefault();
     if (!editingCable) return;
     try {
-      const res = await fetch(`/api/admin/cable-packages/${editingCable.id}`, {
+      const res = await apiFetch(`/api/admin/cable-packages/${editingCable.id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -1465,7 +1465,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
   const handleCreateExam = async (e: React.FormEvent) => {
     e.preventDefault();
     try {
-      const res = await fetch('/api/admin/exam-pins', {
+      const res = await apiFetch('/api/admin/exam-pins', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1491,7 +1491,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     e.preventDefault();
     if (!editingExam) return;
     try {
-      const res = await fetch(`/api/admin/exam-pins/${editingExam.id}`, {
+      const res = await apiFetch(`/api/admin/exam-pins/${editingExam.id}`, {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',
@@ -1534,7 +1534,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     e.preventDefault();
     setIsCreatingUser(true);
     try {
-      const res = await fetch('/api/admin/users/create', {
+      const res = await apiFetch('/api/admin/users/create', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1608,7 +1608,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }
 
       // 2. Sync to API if available
-      await fetch(endpoint, {
+      await apiFetch(endpoint, {
         method: 'DELETE',
         headers: { 'x-user-id': currentAdmin.id },
       }).catch(() => null);
@@ -1635,7 +1635,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
     if (!refundTargetTx) return;
     setIsRefunding(true);
     try {
-      const res = await fetch(`/api/admin/transactions/refund/${refundTargetTx.tx.id}`, {
+      const res = await apiFetch(`/api/admin/transactions/refund/${refundTargetTx.tx.id}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
@@ -1670,7 +1670,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
       }
 
       // 2. Sync to API if available
-      const res = await fetch('/api/settings', {
+      const res = await apiFetch('/api/settings', {
         method: 'PUT',
         headers: {
           'Content-Type': 'application/json',

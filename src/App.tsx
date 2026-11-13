@@ -55,7 +55,7 @@ import { translations, Language } from './lib/i18n.ts';
 import { User, Transaction, NotificationItem, VirtualAccount, UserRole } from './types/index.ts';
 import { collection, getDocs, query, where, doc, getDoc } from 'firebase/firestore';
 import { signOut, onAuthStateChanged } from 'firebase/auth';
-import { firestoreDb, auth } from './lib/firebase.ts';
+import { firestoreDb, auth, apiFetch } from './lib/firebase.ts';
 import {
   syncTransactionToFirestore,
   syncUserToFirestore,
@@ -323,7 +323,7 @@ export default function App() {
   // Handle Quick Demo Account Switch
   const handleQuickSwitch = async (role: UserRole) => {
     try {
-      const res = await fetch('/api/auth/switch-user', {
+      const res = await apiFetch('/api/auth/switch-user', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ role }),
@@ -436,7 +436,7 @@ export default function App() {
 
   const handleMarkNotificationRead = async (id: string) => {
     try {
-      await fetch(`/api/notifications/${id}/read`, { method: 'POST' });
+      await apiFetch(`/api/notifications/${id}/read`, { method: 'POST' });
       setNotifications(prev =>
         prev.map(n => (n.id === id ? { ...n, read: true } : n))
       );

@@ -17,7 +17,7 @@ import {
 } from 'lucide-react';
 import { collection, query, where, getDocs } from 'firebase/firestore';
 import { updatePassword } from 'firebase/auth';
-import { firestoreDb, auth } from '../lib/firebase.ts';
+import { firestoreDb, auth, apiFetch } from '../lib/firebase.ts';
 import { User } from '../types/index.ts';
 import { registerBiometricAuth, getStoredBiometricCredential } from '../lib/webauthn.ts';
 
@@ -88,7 +88,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
   const fetchReferredUsers = async () => {
     setLoadingReferrals(true);
     try {
-      const res = await fetch('/api/user/referrals', {
+      const res = await apiFetch('/api/user/referrals', {
         headers: { 'x-user-id': user.id },
       }).catch(() => null);
 
@@ -121,7 +121,7 @@ export const ProfileModal: React.FC<ProfileModalProps> = ({
 
     setPinLoading(true);
     try {
-      const res = await fetch('/api/auth/set-pin', {
+      const res = await apiFetch('/api/auth/set-pin', {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',

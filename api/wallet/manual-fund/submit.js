@@ -1,8 +1,5 @@
 // Vercel Serverless Function: Submit Manual Funding Request
-import { wrapFirestoreDoc } from '../../auth/_auth_helpers.js';
-
-const FIRESTORE_BASE = 'https://firestore.googleapis.com/v1/projects/gen-lang-client-0376919977/databases/ai-studio-naeemdatasub-8bb16184-21be-4bcb-bf84-6a9163fbd9db/documents';
-const FIRESTORE_KEY = 'AIzaSyBqaJeymaKiXVij6eypZQJFgK2dOH5CoTA';
+import { extractBearerToken, fsCreateDoc } from '../../_firestore.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -18,7 +15,11 @@ export default async function handler(req, res) {
       try { body = JSON.parse(body); } catch {}
     }
 
-    const userId = req.headers['x-user-id'] || 'usr_ahmad_01';
+    const userId = req.headers['x-user-id'];
+    if (!userId) {
+      return res.status(401).json({ error: 'Authentication required' });
+    }
+    const userToken = extractBearerToken(req);
     const amount = Number(body.amount || 0);
     const senderName = String(body.senderName || '').trim();
     const senderBank = String(body.senderBank || '').trim();
@@ -40,12 +41,10 @@ export default async function handler(req, res) {
       createdAt: new Date().toISOString(),
     };
 
-    const payload = wrapFirestoreDoc(newRequest);
-    await fetch(`${FIRESTORE_BASE}/manualFundingRequests?documentId=${reqId}&key=${FIRESTORE_KEY}`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(payload)
-    });
+    const writeRes = await fsCreateDoc('manual_funding_requests', reqId, newRequest, userToken);
+    if (!writeRes.ok) {
+      return res.status(503).json({ error: `Unable to save manual funding request: ${writeRes.error || 'Permission denied'}` });
+    }
 
     return res.status(200).json({ success: true, request: newRequest });
   } catch (err) {
