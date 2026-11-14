@@ -1,21 +1,21 @@
 // Master Vercel Serverless Function & API Router
 import { handleUnityBillsWebhookRequest } from './_webhook_handler.js';
-import healthHandler from './health.js';
-import { handleAdminRoutes, handleResellerStats, handleUserReferrals } from './admin.js';
-import loginHandler from './auth/login.js';
-import registerHandler from './auth/register.js';
-import pinLoginHandler from './auth/pin-login.js';
-import otpLoginHandler from './auth/otp-login.js';
-import switchUserHandler from './auth/switch-user.js';
-import setPinHandler from './auth/set-pin.js';
-import meHandler from './auth/me.js';
-import generateVirtualAccountHandler from './wallet/virtual-account/generate.js';
-import getVirtualAccountHandler from './wallet/virtual-account.js';
-import manualFundConfigHandler from './wallet/manual-fund/config.js';
-import manualFundSubmitHandler from './wallet/manual-fund/submit.js';
-import walletSummaryHandler from './wallet/summary.js';
-import transactionsHandler from './transactions.js';
-import notificationsHandler from './notifications.js';
+import healthHandler from './_routes/health.js';
+import { handleAdminRoutes, handleResellerStats, handleUserReferrals } from './_routes/admin.js';
+import loginHandler from './_routes/auth/login.js';
+import registerHandler from './_routes/auth/register.js';
+import pinLoginHandler from './_routes/auth/pin-login.js';
+import otpLoginHandler from './_routes/auth/otp-login.js';
+import switchUserHandler from './_routes/auth/switch-user.js';
+import setPinHandler from './_routes/auth/set-pin.js';
+import meHandler from './_routes/auth/me.js';
+import generateVirtualAccountHandler from './_routes/wallet/virtual-account/generate.js';
+import getVirtualAccountHandler from './_routes/wallet/virtual-account.js';
+import manualFundConfigHandler from './_routes/wallet/manual-fund/config.js';
+import manualFundSubmitHandler from './_routes/wallet/manual-fund/submit.js';
+import walletSummaryHandler from './_routes/wallet/summary.js';
+import transactionsHandler from './_routes/transactions.js';
+import notificationsHandler from './_routes/notifications.js';
 import {
   handleDataPlans,
   handleAirtimeDiscounts,
@@ -24,7 +24,7 @@ import {
   handleCablePackages,
   handleExamPins,
   handleSettings,
-} from './services/catalog.js';
+} from './_routes/services/catalog.js';
 import {
   handleDataPurchase,
   handleAirtimePurchase,
@@ -36,7 +36,7 @@ import {
   handleWalletFundInitiate,
   handleWalletFundVerify,
   handleSupportTickets,
-} from './services/purchase_handler.js';
+} from './_routes/services/purchase_handler.js';
 
 export default async function handler(req, res) {
   res.setHeader('Access-Control-Allow-Origin', '*');
@@ -54,7 +54,12 @@ export default async function handler(req, res) {
   }
 
   // 1. Webhook endpoints
-  if (url.includes('/webhooks/unitybills') || url.includes('/hooks/deposits') || url.includes('/webhooks/billstack')) {
+  if (
+    url.includes('/webhooks/unitybills') ||
+    url.includes('/unitybills/webhook') ||
+    url.includes('/hooks/deposits') ||
+    url.includes('/webhooks/billstack')
+  ) {
     return handleUnityBillsWebhookRequest(req, res);
   }
 
