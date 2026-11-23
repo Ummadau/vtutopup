@@ -17,5 +17,39 @@
   <body class="bg-slate-50 text-slate-900 antialiased selection:bg-purple-600 selection:text-white">
     <div id="root"></div>
     <script type="module" src="/src/main.tsx"></script>
+    <script>
+      (function () {
+        var scriptLoadError = '';
+        window.addEventListener('error', function (ev) {
+          if (ev && ev.target && ev.target.tagName === 'SCRIPT') {
+            scriptLoadError = 'Failed to load application script: ' + (ev.target.getAttribute('src') || 'unknown');
+          } else if (ev && ev.message && !scriptLoadError) {
+            scriptLoadError = String(ev.message);
+          }
+        }, true);
+        setTimeout(function () {
+          var root = document.getElementById('root');
+          if (!root || root.childElementCount > 0) return;
+          var box = document.createElement('div');
+          box.style.cssText = 'max-width:520px;margin:48px auto;padding:24px;background:#fff;border:1px solid #e2e8f0;border-radius:16px;font-family:system-ui,sans-serif;color:#0f172a;';
+          var h = document.createElement('h2');
+          h.style.cssText = 'margin:0 0 8px;font-size:18px;font-weight:700;';
+          h.textContent = 'App Could Not Start';
+          var p = document.createElement('p');
+          p.style.cssText = 'margin:0 0 12px;font-size:14px;color:#475569;line-height:1.5;';
+          p.textContent = scriptLoadError
+            ? scriptLoadError + ' — Ensure the compiled public_html/index.html and public_html/assets/ folder are uploaded together.'
+            : 'The browser did not load the JavaScript bundle. If hosted on cPanel, upload the compiled contents of public_html/ (index.html + assets/) rather than raw source index.html.';
+          var a = document.createElement('a');
+          a.href = './setup.php';
+          a.textContent = 'Open Setup & File Check (/setup.php)';
+          a.style.cssText = 'display:inline-block;padding:10px 16px;background:#059669;color:#fff;border-radius:10px;text-decoration:none;font-size:13px;font-weight:700;';
+          box.appendChild(h);
+          box.appendChild(p);
+          box.appendChild(a);
+          root.appendChild(box);
+        }, 4500);
+      })();
+    </script>
   </body>
 </html>

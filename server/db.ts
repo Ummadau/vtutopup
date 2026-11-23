@@ -75,7 +75,7 @@ class Database {
 
   constructor() {
     this.vtuNaijaConfig = {
-      apiKey: process.env.VTUNAIJA_API_KEY || '1789c19b08d4a97405e3b6d21ecf42964b58495c',
+      apiKey: process.env.VTUNAIJA_API_KEY || '',
       baseUrl: 'https://vtunaija.com.ng/api',
       dataEndpoint: '/data/',
       airtimeEndpoint: '/topup/',
@@ -414,7 +414,7 @@ class Database {
       role: 'customer',
       status: 'active',
       isVerified: true,
-      avatar: '/public/assets/aistudio/file_000000008bcc8243a78738db4143d576_09f5ebcf.png',
+      avatar: '/assets/aistudio/file_000000008bcc8243a78738db4143d576_09f5ebcf.png',
       referralCode: 'NAEEM88',
       walletBalance: 12500,
       totalSavings: 8200,

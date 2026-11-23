@@ -14,9 +14,18 @@ function syncBuildToPublicHtml(): Plugin {
     closeBundle() {
       const distDir = path.resolve(__dirname, 'dist');
       const publicHtmlDir = path.resolve(__dirname, 'public_html');
+      const publicHtmlAssetsDir = path.resolve(publicHtmlDir, 'assets');
       if (!fs.existsSync(distDir)) return;
       try {
         fs.mkdirSync(publicHtmlDir, { recursive: true });
+        // Remove stale hashed Vite bundles in public_html/assets before copying new build
+        if (fs.existsSync(publicHtmlAssetsDir)) {
+          for (const entry of fs.readdirSync(publicHtmlAssetsDir)) {
+            if (/^index-.*\.(js|css|map)$/.test(entry)) {
+              fs.rmSync(path.join(publicHtmlAssetsDir, entry), { force: true });
+            }
+          }
+        }
         fs.cpSync(distDir, publicHtmlDir, { recursive: true, force: true });
       } catch (err) {
         console.warn('[Vite Build Note] Unable to sync dist to public_html:', err);

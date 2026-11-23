@@ -816,9 +816,15 @@ function writeSecurityHtaccess(string $dir): bool
 {
     $htaccessPath = $dir . DIRECTORY_SEPARATOR . '.htaccess';
     $rules = <<<'HTACCESS'
-# NAEEM DATA SUB / NPay Shared Hosting (public_html) Security & Routing Rules
+# NAEEM DATA SUB / NPay Shared Hosting (public_html) Security, MIME & Routing Rules
 
 Options -Indexes
+
+<IfModule mod_mime.c>
+  AddType application/javascript .js .mjs
+  AddType text/css .css
+  AddType application/json .json
+</IfModule>
 
 # Block direct HTTP access to sensitive configuration, database dumps, and lock files
 <FilesMatch "^(\.env.*|\.install\.lock|persisted_db\.json|package(-lock)?\.json|bun\.lock|composer\.(json|lock)|.*\.sql|.*\.ts|.*\.tsx)$">
@@ -833,7 +839,6 @@ Options -Indexes
 
 <IfModule mod_rewrite.c>
   RewriteEngine On
-  RewriteBase /
 
   RewriteCond %{REQUEST_FILENAME} -f [OR]
   RewriteCond %{REQUEST_FILENAME} -d
@@ -841,7 +846,6 @@ Options -Indexes
 
   RewriteRule ^(api|hooks|webhooks)(/|$) - [L]
 
-  RewriteCond %{DOCUMENT_ROOT}/index.html -f
   RewriteRule ^ index.html [L]
 </IfModule>
 HTACCESS;
@@ -977,7 +981,21 @@ $phpOk = version_compare(PHP_VERSION, '7.4.0', '>=');
 $mysqliOk = extension_loaded('mysqli');
 $dirWritable = is_writable($currentDir);
 $parentWritable = is_writable($parentDir);
-$frontendPresent = is_file($currentDir . DIRECTORY_SEPARATOR . 'index.html');
+$indexHtmlPath = $currentDir . DIRECTORY_SEPARATOR . 'index.html';
+$indexHtmlBody = is_file($indexHtmlPath) ? (string)@file_get_contents($indexHtmlPath) : '';
+$isDevStubIndex = strpos($indexHtmlBody, '/src/main.tsx') !== false;
+$missingBundleFiles = [];
+if ($indexHtmlBody !== '' && !$isDevStubIndex) {
+    if (preg_match_all('/(?:src|href)="(\.?\/assets\/[^"]+)"/i', $indexHtmlBody, $matches)) {
+        foreach ($matches[1] as $refPath) {
+            $rel = ltrim(preg_replace('/^\.\//', '', $refPath), '/');
+            if (!is_file($currentDir . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $rel))) {
+                $missingBundleFiles[] = $rel;
+            }
+        }
+    }
+}
+$frontendPresent = $indexHtmlBody !== '' && !$isDevStubIndex && is_dir($currentDir . DIRECTORY_SEPARATOR . 'assets') && count($missingBundleFiles) === 0;
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -1146,6 +1164,16 @@ $frontendPresent = is_file($currentDir . DIRECTORY_SEPARATOR . 'index.html');
           <p style="font-size:13px; color:var(--muted);">If you intentionally want to re-run installation, delete <code>.install.lock</code> via cPanel File Manager first.</p>
         <?php endif; ?>
 
+        <?php if ($isDevStubIndex): ?>
+          <div class="alert alert-err" style="margin-top:16px; margin-bottom:0;">
+            <strong>Why the App Is Blank:</strong> <code>index.html</code> in this folder is still the uncompiled source HTML (<code>/src/main.tsx</code>). Replace it with the compiled <code>public_html/index.html</code> and <code>public_html/assets/</code> folder.
+          </div>
+        <?php elseif (!$frontendPresent): ?>
+          <div class="alert alert-err" style="margin-top:16px; margin-bottom:0;">
+            <strong>Why the App Is Blank:</strong> <?php echo count($missingBundleFiles) > 0 ? 'Missing compiled bundle file(s): <code>' . e(implode(', ', $missingBundleFiles)) . '</code>.' : 'Missing compiled <code>index.html</code> or <code>assets/</code> folder.'; ?> Re-upload the matching <code>public_html/index.html</code> and <code>public_html/assets/</code> folder together.
+          </div>
+        <?php endif; ?>
+
         <div class="alert alert-warn" style="margin-top:16px; margin-bottom:0;">
           <strong>Security Recommendation:</strong> Delete <code>setup.php</code> from <code>public_html</code> right now so nobody else can access the installer link.
         </div>
@@ -1153,7 +1181,7 @@ $frontendPresent = is_file($currentDir . DIRECTORY_SEPARATOR . 'index.html');
         <form method="post" class="actions">
           <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>" />
           <input type="hidden" name="action" value="delete_installer" />
-          <a class="btn btn-primary" href="/">Go to Platform</a>
+          <a class="btn btn-primary" href="./">Go to Platform</a>
           <button type="submit" class="btn btn-danger">Delete setup.php Now</button>
         </form>
       </div>
@@ -1175,9 +1203,20 @@ $frontendPresent = is_file($currentDir . DIRECTORY_SEPARATOR . 'index.html');
           </div>
           <div class="check-item">
             <span>App Frontend</span>
-            <span class="badge <?php echo $frontendPresent ? 'ok' : 'bad'; ?>"><?php echo $frontendPresent ? 'Detected' : 'Upload dist/*'; ?></span>
+            <span class="badge <?php echo $frontendPresent ? 'ok' : 'bad'; ?>">
+              <?php echo $frontendPresent ? 'Compiled Build' : ($isDevStubIndex ? 'Uncompiled Dev HTML' : 'Missing assets/'); ?>
+            </span>
           </div>
         </div>
+        <?php if ($isDevStubIndex): ?>
+          <div class="alert alert-warn" style="margin-top:12px; margin-bottom:0;">
+            <strong>Blank Index Cause Detected:</strong> Your <code>index.html</code> points to <code>/src/main.tsx</code> (uncompiled source). Replace it with the compiled files inside <code>public_html/</code> (<code>index.html</code> + <code>assets/</code>).
+          </div>
+        <?php elseif (!$frontendPresent): ?>
+          <div class="alert alert-warn" style="margin-top:12px; margin-bottom:0;">
+            <strong>Frontend Assets Missing:</strong> Make sure both <code>index.html</code> and the <code>assets/</code> folder from <code>public_html/</code> are uploaded here so the site renders properly.
+          </div>
+        <?php endif; ?>
       </div>
 
       <form method="post" autocomplete="off">

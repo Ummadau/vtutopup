@@ -1,8 +1,30 @@
+# Dependencies & Build Outputs
 node_modules/
 build/
 dist/
 coverage/
-.DS_Store
+*.tsbuildinfo
+
+# Logs & OS Artifacts
 *.log
-.env*
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+.DS_Store
+Thumbs.db
+
+# Environment & Secrets
+.env
+.env.*
 !.env.example
+public_html/.env*
+
+# Runtime State & Installer Locks
+server/persisted_db.json
+server/persisted_db.json.tmp
+.install.lock
+public_html/.install.lock
+public/.install.lock
+
+# Platform Cache
+.vercel/

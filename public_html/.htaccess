@@ -1,6 +1,13 @@
-# NAEEM DATA SUB / NPay Shared Hosting (public_html) Security & Routing Rules
+# NAEEM DATA SUB / NPay Shared Hosting (public_html) Security, MIME & Routing Rules
 
 Options -Indexes
+
+# Ensure ES module scripts and stylesheets are always served with valid MIME types
+<IfModule mod_mime.c>
+  AddType application/javascript .js .mjs
+  AddType text/css .css
+  AddType application/json .json
+</IfModule>
 
 # Block direct HTTP access to sensitive configuration, database dumps, and lock files
 <FilesMatch "^(\.env.*|\.install\.lock|persisted_db\.json|package(-lock)?\.json|bun\.lock|composer\.(json|lock)|.*\.sql|.*\.ts|.*\.tsx)$">
@@ -15,9 +22,8 @@ Options -Indexes
 
 <IfModule mod_rewrite.c>
   RewriteEngine On
-  RewriteBase /
 
-  # Allow setup.php and existing static files/directories directly
+  # Allow existing static files, assets, and PHP scripts directly
   RewriteCond %{REQUEST_FILENAME} -f [OR]
   RewriteCond %{REQUEST_FILENAME} -d
   RewriteRule ^ - [L]
@@ -25,7 +31,6 @@ Options -Indexes
   # Do not rewrite API or webhook routes to index.html
   RewriteRule ^(api|hooks|webhooks)(/|$) - [L]
 
-  # Single-Page App fallback when dist/index.html is deployed into public_html
-  RewriteCond %{DOCUMENT_ROOT}/index.html -f
+  # Single-Page App fallback when compiled index.html exists in this folder
   RewriteRule ^ index.html [L]
 </IfModule>

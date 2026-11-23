@@ -4415,7 +4415,7 @@ export const AdminDashboard: React.FC<AdminDashboardProps> = ({
                       required
                       value={vtuConfig.apiKey}
                       onChange={e => setVtuConfig({ ...vtuConfig, apiKey: e.target.value })}
-                      placeholder="e.g. 1789c19b08d4a97405e3b6d21ecf42964b58495c"
+                      placeholder="Enter your VTUNaija API Token"
                       className="w-full pl-3 pr-10 py-2.5 rounded-xl border border-slate-200 dark:border-slate-700 bg-white dark:bg-slate-800 text-xs font-mono font-medium text-slate-900 dark:text-white focus:ring-2 focus:ring-purple-600 outline-none"
                     />
                     <button
