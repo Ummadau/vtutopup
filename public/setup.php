@@ -908,6 +908,7 @@ function writeSecurityHtaccess(string $dir): bool
 # NAEEM DATA SUB / NPay Shared Hosting (public_html) Security, MIME & Routing Rules
 
 Options -Indexes
+DirectoryIndex index.html index.php
 
 <IfModule mod_mime.c>
   AddType application/javascript .js .mjs
@@ -1080,7 +1081,7 @@ $indexHtmlBody = is_file($indexHtmlPath) ? (string)@file_get_contents($indexHtml
 $isDevStubIndex = preg_match('/<script[^>]+src=["\']\/src\/main\.tsx["\']/i', $indexHtmlBody) === 1;
 $missingBundleFiles = [];
 if ($indexHtmlBody !== '' && !$isDevStubIndex) {
-    if (preg_match_all('/(?:src|href)="(\.?\/assets\/[^"]+)"/i', $indexHtmlBody, $matches)) {
+    if (preg_match_all('/(?:src|href)=["\'](\.?\/assets\/[a-zA-Z0-9_.\-\/]+\.(?:js|mjs|css|png|jpg|jpeg|svg|webp|ico|json))["\']/i', $indexHtmlBody, $matches)) {
         foreach ($matches[1] as $refPath) {
             $rel = ltrim(preg_replace('/^\.\//', '', $refPath), '/');
             if (!is_file($currentDir . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $rel))) {

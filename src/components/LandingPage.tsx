@@ -112,18 +112,19 @@ export const LandingPage: React.FC<LandingPageProps> = ({
 
               <div className="flex flex-wrap items-center gap-3 pt-2">
                 <button
-                  onClick={onOpenRegister}
+                  onClick={onOpenLogin}
                   className="px-7 py-3.5 rounded-2xl bg-purple-700 hover:bg-purple-800 text-white font-bold text-sm shadow-lg shadow-purple-600/30 transition flex items-center gap-2"
                 >
-                  <span>Get Started</span>
+                  <span>Sign in</span>
                   <ArrowRight className="w-4 h-4" />
                 </button>
-                <a
-                  href="#services"
-                  className="px-6 py-3.5 rounded-2xl bg-white dark:bg-slate-800 hover:bg-slate-50 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 font-bold text-sm shadow-sm transition"
+                <button
+                  type="button"
+                  onClick={onOpenRegister}
+                  className="px-6 py-3.5 rounded-2xl bg-white dark:bg-slate-800 hover:bg-slate-50 border border-slate-200 dark:border-slate-700 text-slate-700 dark:text-slate-200 font-bold text-sm shadow-sm transition cursor-pointer"
                 >
-                  Learn More
-                </a>
+                  Sign up
+                </button>
               </div>
 
               {/* Service Pills Card matching the mockup */}

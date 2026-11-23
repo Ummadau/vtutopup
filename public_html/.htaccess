@@ -1,6 +1,7 @@
 # NAEEM DATA SUB / NPay Shared Hosting (public_html) Security, MIME & Routing Rules
 
 Options -Indexes
+DirectoryIndex index.html index.php
 
 # Ensure ES module scripts and stylesheets are always served with valid MIME types
 <IfModule mod_mime.c>

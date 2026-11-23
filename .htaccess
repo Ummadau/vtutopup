@@ -3,6 +3,7 @@
 # route web traffic to the compiled public_html/ bundle and block source/secret files.
 
 Options -Indexes
+DirectoryIndex public_html/index.html
 
 <IfModule mod_mime.c>
   AddType application/javascript .js .mjs
@@ -32,7 +33,7 @@ Options -Indexes
 
   # Serve compiled production app instead of raw Vite source index.html
   RewriteRule ^$ public_html/index.html [L]
-  RewriteRule ^setup\.php$ public_html/setup.php [L]
+  RewriteRule ^(public/)?setup\.php$ public_html/setup.php [L]
   RewriteRule ^robots\.txt$ public_html/robots.txt [L]
   RewriteRule ^firebase-messaging-sw\.js$ public_html/firebase-messaging-sw.js [L]
   RewriteRule ^assets/(.*)$ public_html/assets/$1 [L]

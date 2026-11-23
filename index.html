@@ -63,7 +63,7 @@
                 return res && res.ok ? res.text() : '';
               })
               .then(function (html) {
-                if (html && html.indexOf('crossorigin src="./assets/') !== -1 && html.indexOf('src="/src/' + 'main.tsx"') === -1) {
+                if (html && html.indexOf('crossorigin src="' + './assets/') !== -1 && html.indexOf('src="/src/' + 'main.tsx"') === -1) {
                   window.location.replace('./public_html/');
                 } else {
                   showStartupError();
