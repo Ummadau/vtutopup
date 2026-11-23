@@ -166,7 +166,7 @@ export const LandingPage: React.FC<LandingPageProps> = ({
             <div className="lg:col-span-5 relative">
               <div className="relative mx-auto max-w-sm sm:max-w-md rounded-3xl overflow-hidden shadow-2xl border-4 border-white dark:border-slate-800 ring-1 ring-purple-500/20">
                 <img
-                  src="/public/assets/aistudio/file_000000008bcc8243a78738db4143d576_09f5ebcf.png"
+                  src="/assets/aistudio/file_000000008bcc8243a78738db4143d576_09f5ebcf.png"
                   alt="NPay Nigerian VTU Platform"
                   className="w-full h-auto object-cover object-top"
                   style={{ maxHeight: '480px' }}

@@ -103,7 +103,7 @@ export async function listenToForegroundPushMessages(
       try {
         new Notification(title, {
           body,
-          icon: '/public/assets/aistudio/file_000000008bcc8243a78738db4143d576_09f5ebcf.png',
+          icon: '/assets/aistudio/file_000000008bcc8243a78738db4143d576_09f5ebcf.png',
         });
       } catch (err) {
         // Ignored if service worker handles
@@ -133,7 +133,7 @@ export async function sendFCMPushAlert(options: {
     try {
       new Notification(title, {
         body,
-        icon: '/public/assets/aistudio/file_000000008bcc8243a78738db4143d576_09f5ebcf.png',
+        icon: '/assets/aistudio/file_000000008bcc8243a78738db4143d576_09f5ebcf.png',
         tag: `naeem_notif_${type}_${Date.now()}`,
       });
     } catch (err) {

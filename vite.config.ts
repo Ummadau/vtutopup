@@ -1,15 +1,34 @@
 import tailwindcss from '@tailwindcss/vite';
 import react from '@vitejs/plugin-react';
+import fs from 'fs';
 import path from 'path';
 import { fileURLToPath } from 'url';
-import { defineConfig } from 'vite';
+import { defineConfig, Plugin } from 'vite';
 
 const __filename = fileURLToPath(import.meta.url);
 const __dirname = path.dirname(__filename);
 
-export default defineConfig(() => {
+function syncBuildToPublicHtml(): Plugin {
   return {
-    plugins: [react(), tailwindcss()],
+    name: 'sync-build-to-public-html',
+    closeBundle() {
+      const distDir = path.resolve(__dirname, 'dist');
+      const publicHtmlDir = path.resolve(__dirname, 'public_html');
+      if (!fs.existsSync(distDir)) return;
+      try {
+        fs.mkdirSync(publicHtmlDir, { recursive: true });
+        fs.cpSync(distDir, publicHtmlDir, { recursive: true, force: true });
+      } catch (err) {
+        console.warn('[Vite Build Note] Unable to sync dist to public_html:', err);
+      }
+    },
+  };
+}
+
+export default defineConfig(({ command }) => {
+  return {
+    base: command === 'build' ? './' : '/',
+    plugins: [react(), tailwindcss(), syncBuildToPublicHtml()],
     resolve: {
       alias: {
         '@': path.resolve(__dirname, '.'),

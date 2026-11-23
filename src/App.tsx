@@ -96,37 +96,48 @@ export default function App() {
   };
   // Helper to load stored session or default to landing page
   const getInitialUserAndSession = (): { user: User; view: 'landing' | 'app' } => {
+    const fallbackUser: User = {
+      id: '',
+      name: 'Guest User',
+      email: '',
+      phone: '',
+      role: 'customer',
+      status: 'active',
+      isVerified: false,
+      avatar: '',
+      referralCode: '',
+      walletBalance: 0,
+      totalSavings: 0,
+      referralEarnings: 0,
+      totalTransactionsCount: 0,
+      createdAt: new Date().toISOString(),
+    };
     try {
       const stored = typeof window !== 'undefined' ? localStorage.getItem('naeem_user_session') : null;
-      
-      let sessionData = null;
+      let sessionData: any = null;
       if (stored) {
         try { sessionData = JSON.parse(stored); } catch {}
       }
 
-      if (sessionData && sessionData.id) {
-        return { user: sessionData, view: 'app' };
+      if (sessionData && typeof sessionData === 'object' && typeof sessionData.id === 'string' && sessionData.id.trim()) {
+        return {
+          user: {
+            ...fallbackUser,
+            ...sessionData,
+            name: String(sessionData.name || 'User'),
+            walletBalance: Number(sessionData.walletBalance || 0),
+            totalSavings: Number(sessionData.totalSavings || 0),
+            referralEarnings: Number(sessionData.referralEarnings || 0),
+            totalTransactionsCount: Number(sessionData.totalTransactionsCount || 0),
+          },
+          view: 'app',
+        };
       }
     } catch (e) {
       console.warn('Session parse note:', e);
     }
     return {
-      user: {
-        id: '',
-        name: 'Guest User',
-        email: '',
-        phone: '',
-        role: 'customer',
-        status: 'active',
-        isVerified: false,
-        avatar: '',
-        referralCode: '',
-        walletBalance: 0,
-        totalSavings: 0,
-        referralEarnings: 0,
-        totalTransactionsCount: 0,
-        createdAt: new Date().toISOString(),
-      },
+      user: fallbackUser,
       view: 'landing',
     };
   };
@@ -563,9 +574,9 @@ export default function App() {
                     <div className="w-9 h-9 rounded-full bg-gradient-to-tr from-purple-700 to-indigo-600 p-0.5">
                       <div className="w-full h-full rounded-full bg-purple-100 dark:bg-slate-800 overflow-hidden flex items-center justify-center font-bold text-xs text-purple-900 dark:text-purple-300">
                         {user.avatar ? (
-                          <img src={user.avatar} alt={user.name} className="w-full h-full object-cover" />
+                          <img src={user.avatar} alt={user.name || 'User'} className="w-full h-full object-cover" />
                         ) : (
-                          user.name.slice(0, 2).toUpperCase()
+                          (user.name || 'NP').slice(0, 2).toUpperCase()
                         )}
                       </div>
                     </div>
@@ -598,9 +609,9 @@ export default function App() {
                           <div className="w-12 h-12 rounded-full bg-gradient-to-tr from-purple-700 to-indigo-600 p-0.5 shadow-md">
                             <div className="w-full h-full rounded-full bg-purple-100 dark:bg-slate-800 overflow-hidden flex items-center justify-center text-sm font-black text-purple-900 dark:text-purple-300">
                               {user.avatar ? (
-                                <img src={user.avatar} alt={user.name} className="w-full h-full object-cover" />
+                                <img src={user.avatar} alt={user.name || 'User'} className="w-full h-full object-cover" />
                               ) : (
-                                user.name.slice(0, 2).toUpperCase()
+                                (user.name || 'NP').slice(0, 2).toUpperCase()
                               )}
                             </div>
                           </div>
@@ -633,7 +644,7 @@ export default function App() {
                             <span>Wallet Balance</span>
                           </div>
                           <div className="text-3xl sm:text-4xl font-black tracking-tight">
-                            ₦{user.walletBalance.toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
+                            ₦{Number(user.walletBalance || 0).toLocaleString('en-NG', { minimumFractionDigits: 2, maximumFractionDigits: 2 })}
                           </div>
                         </div>
 
