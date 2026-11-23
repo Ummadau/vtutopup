@@ -1,6 +1,9 @@
+import 'dotenv/config';
 import express, { Request, Response } from 'express';
+import fs from 'fs';
 import path from 'path';
 import crypto from 'crypto';
+import mysql from 'mysql2/promise';
 import {
   extractBearerToken,
   fsGetDoc,
@@ -11,6 +14,20 @@ import {
 import { runWithRequestContext, getCurrentUserToken } from './server/request-context.ts';
 import firebaseAppletConfig from './firebase-applet-config.json' with { type: 'json' };
 import { db } from './server/db.ts';
+import {
+  isMysqlConfigured,
+  isMysqlActive,
+  initializeMysqlStorage,
+  seedMysqlFromDatabase,
+  mysqlTestConnection,
+  mysqlInsertWebhookLog,
+  mysqlGetWebhookLogs,
+  mysqlUpsertProvider,
+  mysqlInsertLedgerEntry,
+  mysqlSaveSetting,
+  mysqlGetUserById,
+  mysqlGetUserByEmailOrPhone,
+} from './server/mysql.ts';
 import {
   detectNigerianNetwork,
   VTUProviderGateway,
@@ -81,11 +98,22 @@ app.use((req, _res, next) => {
   runWithRequestContext(extractBearerToken(req), () => next());
 });
 
-// Hydrate authenticated user from Firestore if missing from in-memory cache (and not deleted)
+// Hydrate authenticated user from MySQL or Firestore if missing from in-memory cache (and not deleted)
 app.use('/api', async (req, _res, next) => {
   try {
     const headerUid = typeof req.headers['x-user-id'] === 'string' ? req.headers['x-user-id'].trim() : '';
     if (headerUid && !db.users.has(headerUid) && !db.deletedIds.users.includes(headerUid)) {
+      if (isMysqlActive()) {
+        const mysqlUser = await mysqlGetUserById(headerUid).catch(() => null);
+        if (mysqlUser) {
+          db.users.set(mysqlUser.id, mysqlUser);
+          if (Array.isArray(mysqlUser.virtualAccounts) && mysqlUser.virtualAccounts.length > 0) {
+            db.virtualAccounts.set(mysqlUser.id, mysqlUser.virtualAccounts);
+          }
+          db.saveToDisk();
+          return next();
+        }
+      }
       const userToken = getCurrentUserToken();
       const docRes = await fsGetDoc(`users/${headerUid}`, userToken).catch(() => null);
       if (docRes?.ok && docRes.data && docRes.data.id) {
@@ -146,6 +174,8 @@ async function logWebhookToFirestore(req: Request) {
     ip,
     timestamp: new Date().toISOString(),
   };
+
+  await mysqlInsertWebhookLog(logPayload).catch(() => {});
 
   try {
     const res = await fsUpsertDoc('webhook_logs', logId, logPayload, getCurrentUserToken());
@@ -298,17 +328,19 @@ const handleEarlyWebhookRequest = async (req: Request, res: Response) => {
       await recordUserInFirestore(matchedUser).catch(() => {});
 
       // Record in ledger
-      db.ledger.push({
+      const ledgerEntry = {
         id: `led_${Date.now()}`,
         userId: matchedUser.id,
         reference,
-        type: 'credit',
+        type: 'credit' as const,
         amount,
         balanceBefore,
         balanceAfter,
         description: `Virtual Account Deposit via ${bankName} (${accountNumber || 'Automated Account'})`,
         timestamp: new Date().toISOString(),
-      });
+      };
+      db.ledger.push(ledgerEntry);
+      await mysqlInsertLedgerEntry(ledgerEntry).catch(() => {});
 
       // Record transaction
       const txId = `tx_${Date.now()}`;
@@ -330,6 +362,7 @@ const handleEarlyWebhookRequest = async (req: Request, res: Response) => {
         date: new Date().toISOString(),
         paymentMethod: `Bank Transfer (${bankName})`,
       };
+      db.transactions.set(txId, tx);
       db.saveToDisk();
       await recordTransactionInFirestore(tx).catch(() => {});
 
@@ -572,6 +605,25 @@ function hashPassword(password: string): string {
 }
 
 function verifyPassword(password: string, storedHash: string): boolean {
+  if (!storedHash) return false;
+  if (storedHash.startsWith('pbkdf2:sha256:')) {
+    const parts = storedHash.split(':');
+    if (parts.length !== 5) return false;
+    const iterations = parseInt(parts[2], 10);
+    const salt = parts[3];
+    const keyHex = parts[4];
+    if (!iterations || !salt || !keyHex) return false;
+    const keyBuf = Buffer.from(keyHex, 'hex');
+    const derivedBuf = Buffer.from(crypto.pbkdf2Sync(password, salt, iterations, 32, 'sha256').toString('hex'), 'utf8');
+    // Match PHP hash_pbkdf2(..., 64, false) which outputs 64 hex chars (32 bytes = 64 hex digits)
+    const keyTextBuf = Buffer.from(keyHex.toLowerCase(), 'utf8');
+    if (keyTextBuf.length === derivedBuf.length) {
+      return crypto.timingSafeEqual(keyTextBuf, derivedBuf);
+    }
+    const rawDerived = crypto.pbkdf2Sync(password, salt, iterations, keyBuf.length, 'sha256');
+    if (keyBuf.length !== rawDerived.length) return false;
+    return crypto.timingSafeEqual(keyBuf, rawDerived);
+  }
   const parts = storedHash.split(':');
   if (parts.length !== 2) return false;
   const [salt, keyHex] = parts;
@@ -689,11 +741,17 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
   const adminPassword = process.env.ADMIN_DEFAULT_PASSWORD || 'naeem1234';
 
   // Super Admin single unified login check
-  if (clean === 'naeemummadau@gmail.com' || cleanPhone === '08000000001') {
-    const isPasswordValid = Boolean(password && String(password) === adminPassword);
-    const isGoogleVerified = Boolean(verifiedEmail && verifiedEmail === 'naeemummadau@gmail.com');
+  const existingAdmin = db.users.get('usr_admin_01') as (User & { passwordHash?: string }) | undefined;
+  const adminEmailMatch = clean === 'naeemummadau@gmail.com' || (existingAdmin?.email && clean === existingAdmin.email.toLowerCase());
+  const adminPhoneMatch = cleanPhone === '08000000001' || (existingAdmin?.phone && cleanPhone === normalizePhoneNumber(existingAdmin.phone));
+
+  if (adminEmailMatch || adminPhoneMatch) {
+    const hashMatches = Boolean(password && existingAdmin?.passwordHash && verifyPassword(String(password), existingAdmin.passwordHash));
+    const envMatches = Boolean(password && !existingAdmin?.passwordHash && String(password) === adminPassword) || Boolean(password && process.env.ADMIN_DEFAULT_PASSWORD && String(password) === process.env.ADMIN_DEFAULT_PASSWORD);
+    const isPasswordValid = hashMatches || envMatches;
+    const isGoogleVerified = Boolean(verifiedEmail && (verifiedEmail === 'naeemummadau@gmail.com' || (existingAdmin?.email && verifiedEmail === existingAdmin.email.toLowerCase())));
     if (isPasswordValid || isGoogleVerified) {
-      let admin = db.users.get('usr_admin_01');
+      let admin = existingAdmin;
       if (!admin) {
         admin = {
           id: 'usr_admin_01',
@@ -729,7 +787,19 @@ app.post('/api/auth/login', async (req: Request, res: Response) => {
     return (userEmail && userEmail === clean) || (userPhone && userPhone === cleanPhone);
   });
 
-  // Fallback: Query Firestore via REST if not in local disk cache
+  // Fallback: Query MySQL or Firestore if not in local disk cache
+  if (!user && isMysqlActive()) {
+    const mysqlUser = await mysqlGetUserByEmailOrPhone(clean, cleanPhone).catch(() => null);
+    if (mysqlUser && !db.deletedIds.users.includes(mysqlUser.id)) {
+      user = mysqlUser;
+      db.users.set(user.id, user);
+      if (Array.isArray(mysqlUser.virtualAccounts) && mysqlUser.virtualAccounts.length > 0) {
+        db.virtualAccounts.set(user.id, mysqlUser.virtualAccounts);
+      }
+      db.saveToDisk();
+    }
+  }
+
   if (!user) {
     try {
       const userToken = getCurrentUserToken();
@@ -937,18 +1007,25 @@ app.post('/api/notifications/fcm-send', (req: Request, res: Response) => {
 // ==================== HEALTH CHECK ====================
 app.get('/api/health', async (_req: Request, res: Response) => {
   try {
-    const liveRes = await fsRunQuery('dataPlans', [], 50, getCurrentUserToken());
+    const mysqlConfigured = isMysqlConfigured();
+    const mysqlConnected = mysqlConfigured ? await mysqlTestConnection().catch(() => false) : false;
+    const liveRes = await fsRunQuery('dataPlans', [], 50, getCurrentUserToken()).catch(() => null);
+    const firestoreOk = Boolean(liveRes?.ok);
     res.json({
-      success: Boolean(liveRes.ok),
-      firestoreConnected: Boolean(liveRes.ok),
-      publicCatalogCount: liveRes.ok ? liveRes.documents.length : 0,
+      success: mysqlConnected || firestoreOk || db.dataPlans.size > 0,
+      storageMode: mysqlConnected ? 'mysql' : 'firestore',
+      mysqlConfigured,
+      mysqlConnected,
+      firestoreConnected: firestoreOk,
+      publicCatalogCount: firestoreOk && liveRes ? liveRes.documents.length : db.dataPlans.size,
       serviceAccountConfigured: isServiceAccountConfigured(),
     });
-  } catch (err: any) {
+  } catch {
     res.status(200).json({
-      success: false,
+      success: db.dataPlans.size > 0,
+      mysqlConfigured: isMysqlConfigured(),
+      mysqlConnected: false,
       firestoreConnected: false,
-      firestoreError: err?.message || 'Firestore check failed',
     });
   }
 });
@@ -1427,17 +1504,19 @@ const handleUnityBillsWebhook = (req: Request, res: Response) => {
       db.users.set(matchedUser.id, matchedUser);
 
       // Record in ledger
-      db.ledger.push({
+      const ledgerEntry = {
         id: `led_${Date.now()}`,
         userId: matchedUser.id,
         reference,
-        type: 'credit',
+        type: 'credit' as const,
         amount,
         balanceBefore,
         balanceAfter,
         description: `Virtual Account Deposit via ${bankName} (${accountNumber || 'Automated Account'})`,
         timestamp: new Date().toISOString(),
-      });
+      };
+      db.ledger.push(ledgerEntry);
+      mysqlInsertLedgerEntry(ledgerEntry).catch(() => {});
 
       // Record transaction
       const txId = `tx_${Date.now()}`;
@@ -3314,6 +3393,7 @@ app.put('/api/admin/providers/:id', (req: Request, res: Response) => {
   Object.assign(provider, stripMaskedSecrets(req.body || {}));
   db.providers.set(provider.id, provider);
   db.saveToDisk();
+  mysqlUpsertProvider(provider).catch(() => {});
   persistAudit(admin.email, 'UPDATE_PROVIDER_CONFIG', provider.name, JSON.stringify(stripMaskedSecrets(req.body || {})));
   res.json({ success: true, provider });
 });
@@ -3381,6 +3461,7 @@ app.post('/api/admin/vtu-naija/ping', async (req: Request, res: Response) => {
   cfg.lastStatus = 'connected';
   cfg.balance = balance;
   db.saveToDisk();
+  await mysqlSaveSetting('vtu_config', cfg).catch(() => {});
 
   res.json({
     success: true,
@@ -3477,6 +3558,7 @@ app.post('/api/admin/ncwallet/ping', async (req: Request, res: Response) => {
   cfg.lastStatus = liveSuccess ? 'connected' : (cfg.apiKey && cfg.apiKey !== 'NCWALLET_TOKEN_KEY' ? 'error' : 'unconfigured');
   cfg.balance = balance;
   db.saveToDisk();
+  await mysqlSaveSetting('nc_config', cfg).catch(() => {});
 
   res.json({
     success: liveSuccess,
@@ -3521,14 +3603,26 @@ app.post('/api/admin/unitybills/ping', async (req: Request, res: Response) => {
   res.json(result);
 });
 
-// Admin: Fetch Webhook Diagnostic Logs from Firestore collection 'webhook_logs'
+// Admin: Fetch Webhook Diagnostic Logs from MySQL / Firestore
 app.get(['/api/admin/webhook-logs', '/api/admin/webhook-logs/'], async (req: Request, res: Response) => {
   const admin = getAuthenticatedUser(req);
   if (admin.role !== 'admin') return res.status(403).json({ error: 'Unauthorized' });
 
   try {
-    const qRes = await fsRunQuery('webhook_logs', [], 50, getCurrentUserToken());
-    const logs = (qRes.ok ? qRes.documents : [])
+    const [mysqlLogs, qRes] = await Promise.all([
+      isMysqlActive() ? mysqlGetWebhookLogs(50).catch(() => []) : Promise.resolve([]),
+      fsRunQuery('webhook_logs', [], 50, getCurrentUserToken()).catch(() => ({ ok: false, documents: [] })),
+    ]);
+
+    const mergedMap = new Map<string, any>();
+    (qRes.ok ? qRes.documents : []).forEach((doc: any) => {
+      if (doc?.id) mergedMap.set(doc.id, doc);
+    });
+    mysqlLogs.forEach(doc => {
+      if (doc?.id) mergedMap.set(doc.id, doc);
+    });
+
+    const logs = Array.from(mergedMap.values())
       .sort((a: any, b: any) => new Date(b.timestamp || 0).getTime() - new Date(a.timestamp || 0).getTime())
       .slice(0, 50);
 
@@ -3576,11 +3670,185 @@ app.get('/api/admin/audit-logs', async (req: Request, res: Response) => {
   res.json({ auditLogs: db.auditLogs.slice(0, 100) });
 });
 
+// ==================== LOCKED NODE SYSTEM SETUP ENDPOINTS ====================
+function isSystemSetupLocked(): boolean {
+  const lockPaths = [
+    path.resolve(process.cwd(), '.install.lock'),
+    path.resolve(process.cwd(), 'public_html', '.install.lock'),
+    path.resolve(process.cwd(), 'public', '.install.lock'),
+  ];
+  const hasLockFile = lockPaths.some(p => {
+    try {
+      return fs.existsSync(p);
+    } catch {
+      return false;
+    }
+  });
+  const adminWithHash = Boolean((db.users.get('usr_admin_01') as any)?.passwordHash);
+  return hasLockFile || isMysqlActive() || db.catalogBootstrapped || adminWithHash || process.env.VERCEL === '1';
+}
+
+function sanitizeEnvLineValue(raw: string): string {
+  const cleaned = String(raw || '').replace(/[\r\n\0]/g, '').replace(/\\/g, '\\\\').replace(/"/g, '\\"').replace(/\$/g, '\\$');
+  return `"${cleaned}"`;
+}
+
+app.get('/api/setup/status', (_req: Request, res: Response) => {
+  res.json({
+    installed: isSystemSetupLocked(),
+    storageMode: isMysqlActive() ? 'mysql' : (isServiceAccountConfigured() ? 'firestore' : 'disk'),
+    phpInstallerPath: '/setup.php',
+  });
+});
+
+app.post('/api/setup/test-mysql', async (req: Request, res: Response) => {
+  if (isSystemSetupLocked()) {
+    return res.status(403).json({ error: 'System is already installed and locked.' });
+  }
+  const { host, port, socketPath, user, password, database, ssl } = req.body || {};
+  if (!user || !database || (!host && !socketPath)) {
+    return res.status(400).json({ error: 'Host/socket, database username, and database name are required.' });
+  }
+  try {
+    const conn = await mysql.createConnection({
+      ...(socketPath ? { socketPath: String(socketPath).trim() } : { host: String(host || 'localhost').trim(), port: Number(port) || 3306 }),
+      user: String(user).trim(),
+      password: String(password || ''),
+      database: String(database).trim(),
+      connectTimeout: 6000,
+      ...(ssl ? { ssl: { rejectUnauthorized: false } } : {}),
+    });
+    const [rows] = await conn.query('SHOW TABLES');
+    await conn.end();
+    return res.json({ success: true, existingTables: Array.isArray(rows) ? rows.length : 0 });
+  } catch (err: any) {
+    return res.status(400).json({ error: err?.message || 'Unable to connect to MySQL database' });
+  }
+});
+
+app.post('/api/setup/install', async (req: Request, res: Response) => {
+  if (isSystemSetupLocked()) {
+    return res.status(403).json({ error: 'System is already installed and locked. Remove .install.lock on the server to re-run setup.' });
+  }
+  const {
+    host,
+    port,
+    socketPath,
+    user,
+    password,
+    database,
+    ssl,
+    platformName,
+    adminName,
+    adminEmail,
+    adminPhone,
+    adminPassword,
+    adminPin,
+  } = req.body || {};
+
+  if (!user || !database || (!host && !socketPath)) {
+    return res.status(400).json({ error: 'Database credentials are required.' });
+  }
+  if (!adminEmail || !String(adminEmail).includes('@')) {
+    return res.status(400).json({ error: 'Valid admin email is required.' });
+  }
+  if (!adminPassword || String(adminPassword).length < 8) {
+    return res.status(400).json({ error: 'Admin password must be at least 8 characters.' });
+  }
+  if (adminPin && !/^\d{4}$/.test(String(adminPin))) {
+    return res.status(400).json({ error: 'Transaction PIN must be 4 digits.' });
+  }
+
+  try {
+    process.env.MYSQL_HOST = String(host || 'localhost').trim();
+    process.env.MYSQL_PORT = String(Number(port) || 3306);
+    process.env.MYSQL_SOCKET_PATH = String(socketPath || '').trim();
+    process.env.MYSQL_USER = String(user).trim();
+    process.env.MYSQL_PASSWORD = String(password || '');
+    process.env.MYSQL_DATABASE = String(database).trim();
+    process.env.MYSQL_SSL = ssl ? 'true' : 'false';
+    process.env.ADMIN_DEFAULT_PASSWORD = String(adminPassword);
+
+    if (platformName) db.settings.platformName = String(platformName).trim();
+
+    const adminHash = hashPassword(String(adminPassword));
+    const existingAdmin = db.users.get('usr_admin_01');
+    const updatedAdmin: User & { passwordHash?: string } = {
+      ...(existingAdmin || {
+        id: 'usr_admin_01',
+        role: 'admin',
+        status: 'active',
+        isVerified: true,
+        referralCode: 'ADMIN01',
+        walletBalance: 250000,
+        totalSavings: 0,
+        referralEarnings: 0,
+        totalTransactionsCount: 0,
+        createdAt: new Date().toISOString(),
+      }),
+      name: String(adminName || existingAdmin?.name || 'Naeem Ummadau').trim(),
+      email: String(adminEmail).trim().toLowerCase(),
+      phone: String(adminPhone || existingAdmin?.phone || '08000000001').trim(),
+      transactionPin: String(adminPin || existingAdmin?.transactionPin || '1234'),
+      passwordHash: adminHash,
+    };
+    db.users.set('usr_admin_01', updatedAdmin);
+
+    const initialized = await initializeMysqlStorage(db);
+    if (!initialized) {
+      return res.status(400).json({ error: 'Could not connect or initialize MySQL tables. Please check your database credentials.' });
+    }
+    await seedMysqlFromDatabase(db);
+    db.catalogBootstrapped = true;
+    db.saveToDisk();
+
+    const envLines = [
+      `# Generated by NAEEM DATA SUB installer on ${new Date().toISOString()}`,
+      `NODE_ENV="production"`,
+      `PORT="3000"`,
+      `MYSQL_HOST=${sanitizeEnvLineValue(process.env.MYSQL_HOST)}`,
+      `MYSQL_PORT=${sanitizeEnvLineValue(process.env.MYSQL_PORT)}`,
+      `MYSQL_SOCKET_PATH=${sanitizeEnvLineValue(process.env.MYSQL_SOCKET_PATH)}`,
+      `MYSQL_USER=${sanitizeEnvLineValue(process.env.MYSQL_USER)}`,
+      `MYSQL_PASSWORD=${sanitizeEnvLineValue(process.env.MYSQL_PASSWORD)}`,
+      `MYSQL_DATABASE=${sanitizeEnvLineValue(process.env.MYSQL_DATABASE)}`,
+      `MYSQL_SSL=${sanitizeEnvLineValue(process.env.MYSQL_SSL)}`,
+      `ADMIN_DEFAULT_PASSWORD=${sanitizeEnvLineValue(String(adminPassword))}`,
+    ];
+    fs.writeFileSync(path.resolve(process.cwd(), '.env'), envLines.join('\n') + '\n', { mode: 0o600 });
+    fs.writeFileSync(
+      path.resolve(process.cwd(), '.install.lock'),
+      JSON.stringify({ installed: true, installedAt: new Date().toISOString(), database: process.env.MYSQL_DATABASE }, null, 2) + '\n',
+      { mode: 0o600 }
+    );
+
+    return res.json({ success: true, message: 'MySQL tables, catalog data, and admin account installed successfully!' });
+  } catch (err: any) {
+    return res.status(500).json({ error: err?.message || 'Setup failed' });
+  }
+});
+
 // ==================== VITE & STATIC FILES SETUP ====================
 async function startServer() {
-  // Sync all product catalogs with Firestore
-  await initializeFirestoreProductCatalog().catch(err => {
-    console.warn('[Firestore Startup Product Sync Note]:', err?.message || err);
+  // Initialize shared-hosting MySQL persistence first when configured & reachable
+  let mysqlReady = false;
+  if (isMysqlConfigured()) {
+    mysqlReady = await initializeMysqlStorage(db).catch(err => {
+      console.warn('[MySQL Startup Sync Note]:', err?.message || err);
+      return false;
+    });
+  }
+
+  if (!mysqlReady) {
+    // Sync all product catalogs with Firestore when MySQL is not active
+    await initializeFirestoreProductCatalog().catch(err => {
+      console.warn('[Firestore Startup Product Sync Note]:', err?.message || err);
+    });
+  }
+
+  // Prevent Node static server from exposing setup.php source code; redirect to /setup
+  app.get('/setup.php', (_req: Request, res: Response) => {
+    res.redirect(302, '/setup');
   });
 
   if (process.env.NODE_ENV === 'production') {
@@ -3599,7 +3867,7 @@ async function startServer() {
   }
 
   app.listen(PORT, '0.0.0.0', () => {
-    console.log(`🚀 NPay Server running on port ${PORT}`);
+    console.log(`🚀 NPay Server running on port ${PORT} (${isMysqlActive() ? 'MySQL' : 'Firestore/Disk'} mode)`);
   });
 }
 

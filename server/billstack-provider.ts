@@ -2,6 +2,7 @@ import { fsGetDoc, fsPatchDoc, fsUpsertDoc } from '../api/_firestore.js';
 import { getCurrentUserToken } from './request-context.ts';
 import { BillStackConfig, VirtualAccount, User } from '../src/types/index.ts';
 import { db } from './db.ts';
+import { isMysqlActive, mysqlGetSetting, mysqlSaveSetting, mysqlSaveVirtualAccounts } from './mysql.ts';
 
 // In-memory fallback config
 export const defaultBillStackConfig: BillStackConfig = {
@@ -21,6 +22,17 @@ let memoryBillStackConfig: BillStackConfig = { ...defaultBillStackConfig };
  * Load BillStack configuration from Firestore with memory fallback
  */
 export async function getFirestoreBillStackConfig(): Promise<BillStackConfig> {
+  if (isMysqlActive()) {
+    const mysqlCfg = await mysqlGetSetting<BillStackConfig>('billstack_config').catch(() => null);
+    if (mysqlCfg) {
+      memoryBillStackConfig = {
+        ...defaultBillStackConfig,
+        ...memoryBillStackConfig,
+        ...mysqlCfg,
+      };
+      return memoryBillStackConfig;
+    }
+  }
   const userToken = getCurrentUserToken();
   try {
     const res = await fsGetDoc('systemSettings/billstack_config', userToken);
@@ -44,6 +56,10 @@ export async function saveFirestoreBillStackConfig(config: Partial<BillStackConf
     ...config,
     lastTested: new Date().toISOString(),
   };
+
+  if (isMysqlActive()) {
+    await mysqlSaveSetting('billstack_config', memoryBillStackConfig).catch(() => {});
+  }
 
   const userToken = getCurrentUserToken();
   try {
@@ -202,6 +218,7 @@ export function saveUserVirtualAccount(userId: string, newAccount: VirtualAccoun
     db.users.set(userId, targetUser);
   }
   db.saveToDisk();
+  mysqlSaveVirtualAccounts(userId, updated).catch(() => {});
 
   const userToken = getCurrentUserToken();
   fsPatchDoc(

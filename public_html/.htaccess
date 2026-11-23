@@ -1,0 +1,31 @@
+# NAEEM DATA SUB / NPay Shared Hosting (public_html) Security & Routing Rules
+
+Options -Indexes
+
+# Block direct HTTP access to sensitive configuration, database dumps, and lock files
+<FilesMatch "^(\.env.*|\.install\.lock|persisted_db\.json|package(-lock)?\.json|bun\.lock|composer\.(json|lock)|.*\.sql|.*\.ts|.*\.tsx)$">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+  </IfModule>
+</FilesMatch>
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+  RewriteBase /
+
+  # Allow setup.php and existing static files/directories directly
+  RewriteCond %{REQUEST_FILENAME} -f [OR]
+  RewriteCond %{REQUEST_FILENAME} -d
+  RewriteRule ^ - [L]
+
+  # Do not rewrite API or webhook routes to index.html
+  RewriteRule ^(api|hooks|webhooks)(/|$) - [L]
+
+  # Single-Page App fallback when dist/index.html is deployed into public_html
+  RewriteCond %{DOCUMENT_ROOT}/index.html -f
+  RewriteRule ^ index.html [L]
+</IfModule>

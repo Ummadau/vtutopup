@@ -44,6 +44,7 @@ import { SupportModal } from './components/SupportModal.tsx';
 import { NotificationsModal } from './components/NotificationsModal.tsx';
 import { AuthModal } from './components/AuthModal.tsx';
 import { LandingPage } from './components/LandingPage.tsx';
+import { SystemSetupPage } from './components/SystemSetupPage.tsx';
 import { listenToForegroundPushMessages } from './lib/fcmService.ts';
 import { ResellerDashboard } from './components/ResellerDashboard.tsx';
 import { AdminDashboard } from './components/AdminDashboard.tsx';
@@ -67,6 +68,10 @@ import {
 } from './lib/firebaseService.ts';
 
 export default function App() {
+  const [isSetupRoute, setIsSetupRoute] = useState<boolean>(
+    typeof window !== 'undefined' && (window.location.pathname === '/setup' || window.location.pathname === '/setup/')
+  );
+
   // UI State
   const [currentLang, setCurrentLang] = useState<Language>('en');
   const [toasts, setToasts] = useState<ToastMessage[]>([]);
@@ -457,8 +462,16 @@ export default function App() {
       <ToastPopup toasts={toasts} onDismiss={removeToast} />
 
       <div className="min-h-screen bg-slate-100 dark:bg-slate-950 text-slate-900 dark:text-white transition-colors duration-200">
-        {/* If viewing landing page */}
-        {currentView === 'landing' ? (
+        {isSetupRoute ? (
+          <SystemSetupPage
+            onGoHome={() => {
+              if (typeof window !== 'undefined') {
+                window.history.pushState({}, '', '/');
+              }
+              setIsSetupRoute(false);
+            }}
+          />
+        ) : currentView === 'landing' ? (
           <LandingPage
             onOpenLogin={() => { setAuthInitialMode('login'); setIsAuthOpen(true); }}
             onOpenRegister={() => { setAuthInitialMode('register'); setIsAuthOpen(true); }}

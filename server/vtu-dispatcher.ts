@@ -30,6 +30,27 @@ import {
 } from '../src/types/index.ts';
 import { db } from './db.ts';
 import { getFirestoreUnityBillsConfig } from './unitybills-provider.ts';
+import {
+  isMysqlActive,
+  mysqlSaveSetting,
+  mysqlGetSetting,
+  mysqlUpsertTransaction,
+  mysqlUpsertUser,
+  mysqlDeleteUser,
+  mysqlUpsertManualFundingRequest,
+  mysqlUpsertDataPlan,
+  mysqlDeleteDataPlan,
+  mysqlUpsertAirtimeDiscount,
+  mysqlUpsertElectricityDisco,
+  mysqlDeleteElectricityDisco,
+  mysqlUpsertCablePackage,
+  mysqlDeleteCablePackage,
+  mysqlUpsertExamPin,
+  mysqlDeleteExamPin,
+  mysqlUpsertTicket,
+  mysqlUpsertNotification,
+  mysqlInsertAuditLog,
+} from './mysql.ts';
 
 export interface VTUPurchaseParams {
   serviceType: 'data' | 'airtime' | 'electricity' | 'cable' | 'exam_pin';
@@ -57,6 +78,7 @@ export interface VTUDispatchResult {
 async function markCatalogBootstrapped(userToken: string | null = getCurrentUserToken()): Promise<void> {
   db.catalogBootstrapped = true;
   db.saveToDisk();
+  await mysqlSaveSetting('catalog_meta', { bootstrapped: true, updatedAt: new Date().toISOString() }).catch(() => null);
   await fsUpsertDoc(
     'systemSettings',
     'catalog_meta',
@@ -66,10 +88,11 @@ async function markCatalogBootstrapped(userToken: string | null = getCurrentUser
 }
 
 /**
- * Helper to record transaction document directly in Firestore
+ * Helper to record transaction document directly in Firestore & MySQL
  */
 export async function recordTransactionInFirestore(tx: Transaction): Promise<void> {
   const userToken = getCurrentUserToken();
+  await mysqlUpsertTransaction(tx).catch(() => {});
   try {
     await fsUpsertDoc(
       'transactions',
@@ -90,6 +113,7 @@ export async function recordUserInFirestore(user: User): Promise<void> {
   const userToken = getCurrentUserToken();
   db.unmarkDeleted('users', user.id);
   db.saveToDisk();
+  await mysqlUpsertUser(user as User & { passwordHash?: string }).catch(() => {});
   try {
     const cleanUser = { ...user } as Record<string, any>;
     delete cleanUser.passwordHash;
@@ -110,6 +134,7 @@ export async function recordUserInFirestore(user: User): Promise<void> {
 export async function deleteUserFromFirestore(userId: string): Promise<void> {
   const userToken = getCurrentUserToken();
   db.markDeleted('users', userId);
+  await mysqlDeleteUser(userId).catch(() => {});
   try {
     await fsDeleteDoc(`users/${userId}`, userToken);
   } catch (err: any) {
@@ -120,6 +145,7 @@ export async function deleteUserFromFirestore(userId: string): Promise<void> {
 export async function saveFirestorePlatformSettings(settings: Partial<SystemSettings>): Promise<void> {
   const userToken = getCurrentUserToken();
   db.saveToDisk();
+  await mysqlSaveSetting('general', db.settings).catch(() => {});
   try {
     const payload = { ...settings, updatedAt: new Date().toISOString() };
     await fsUpsertDoc('systemSettings', 'general', payload, userToken);
@@ -132,6 +158,7 @@ export async function saveFirestoreManualFundingConfig(config: ManualFundingConf
   const userToken = getCurrentUserToken();
   db.manualFundingConfig = { ...db.manualFundingConfig, ...config };
   db.saveToDisk();
+  await mysqlSaveSetting('manual_funding', db.manualFundingConfig).catch(() => {});
   try {
     await fsUpsertDoc(
       'settings',
@@ -148,6 +175,7 @@ export async function recordManualFundingRequestInFirestore(req: ManualFundingRe
   const userToken = getCurrentUserToken();
   db.manualFundingRequests.set(req.id, req);
   db.saveToDisk();
+  await mysqlUpsertManualFundingRequest(req).catch(() => {});
   try {
     await fsUpsertDoc(
       'manual_funding_requests',
@@ -164,6 +192,7 @@ export async function recordDataPlanInFirestore(plan: DataPlan): Promise<void> {
   const userToken = getCurrentUserToken();
   db.unmarkDeleted('dataPlans', plan.id);
   db.saveToDisk();
+  await mysqlUpsertDataPlan(plan).catch(() => {});
   try {
     await fsUpsertDoc(
       'dataPlans',
@@ -180,6 +209,7 @@ export async function recordDataPlanInFirestore(plan: DataPlan): Promise<void> {
 export async function deleteDataPlanFromFirestore(planId: string): Promise<void> {
   const userToken = getCurrentUserToken();
   db.markDeleted('dataPlans', planId);
+  await mysqlDeleteDataPlan(planId).catch(() => {});
   try {
     await markCatalogBootstrapped(userToken);
     await fsDeleteDoc(`dataPlans/${planId}`, userToken);
@@ -191,6 +221,7 @@ export async function deleteDataPlanFromFirestore(planId: string): Promise<void>
 export async function recordAirtimeDiscountInFirestore(discount: AirtimeDiscount): Promise<void> {
   const userToken = getCurrentUserToken();
   db.saveToDisk();
+  await mysqlUpsertAirtimeDiscount(discount).catch(() => {});
   try {
     await fsUpsertDoc(
       'airtimeDiscounts',
@@ -208,6 +239,7 @@ export async function recordElectricityDiscoInFirestore(disco: ElectricityDisco)
   const userToken = getCurrentUserToken();
   db.unmarkDeleted('electricityDiscos', disco.id);
   db.saveToDisk();
+  await mysqlUpsertElectricityDisco(disco).catch(() => {});
   try {
     await fsUpsertDoc(
       'electricityDiscos',
@@ -224,6 +256,7 @@ export async function recordElectricityDiscoInFirestore(disco: ElectricityDisco)
 export async function deleteElectricityDiscoFromFirestore(discoId: string): Promise<void> {
   const userToken = getCurrentUserToken();
   db.markDeleted('electricityDiscos', discoId);
+  await mysqlDeleteElectricityDisco(discoId).catch(() => {});
   try {
     await markCatalogBootstrapped(userToken);
     await fsDeleteDoc(`electricityDiscos/${discoId}`, userToken);
@@ -236,6 +269,7 @@ export async function recordCablePackageInFirestore(pkg: CablePackage): Promise<
   const userToken = getCurrentUserToken();
   db.unmarkDeleted('cablePackages', pkg.id);
   db.saveToDisk();
+  await mysqlUpsertCablePackage(pkg).catch(() => {});
   try {
     await fsUpsertDoc(
       'cablePackages',
@@ -252,6 +286,7 @@ export async function recordCablePackageInFirestore(pkg: CablePackage): Promise<
 export async function deleteCablePackageFromFirestore(packageId: string): Promise<void> {
   const userToken = getCurrentUserToken();
   db.markDeleted('cablePackages', packageId);
+  await mysqlDeleteCablePackage(packageId).catch(() => {});
   try {
     await markCatalogBootstrapped(userToken);
     await fsDeleteDoc(`cablePackages/${packageId}`, userToken);
@@ -264,6 +299,7 @@ export async function recordExamPinInFirestore(pin: ExamPin): Promise<void> {
   const userToken = getCurrentUserToken();
   db.unmarkDeleted('examPins', pin.id);
   db.saveToDisk();
+  await mysqlUpsertExamPin(pin).catch(() => {});
   try {
     await fsUpsertDoc(
       'examPins',
@@ -280,6 +316,7 @@ export async function recordExamPinInFirestore(pin: ExamPin): Promise<void> {
 export async function deleteExamPinFromFirestore(pinId: string): Promise<void> {
   const userToken = getCurrentUserToken();
   db.markDeleted('examPins', pinId);
+  await mysqlDeleteExamPin(pinId).catch(() => {});
   try {
     await markCatalogBootstrapped(userToken);
     await fsDeleteDoc(`examPins/${pinId}`, userToken);
@@ -291,6 +328,7 @@ export async function deleteExamPinFromFirestore(pinId: string): Promise<void> {
 export async function recordTicketInFirestore(ticket: SupportTicket): Promise<void> {
   const userToken = getCurrentUserToken();
   db.saveToDisk();
+  await mysqlUpsertTicket(ticket).catch(() => {});
   try {
     await fsUpsertDoc(
       'supportTickets',
@@ -305,6 +343,7 @@ export async function recordTicketInFirestore(ticket: SupportTicket): Promise<vo
 
 export async function recordNotificationInFirestore(notif: NotificationItem): Promise<void> {
   const userToken = getCurrentUserToken();
+  await mysqlUpsertNotification(notif).catch(() => {});
   try {
     await fsUpsertDoc('notifications', notif.id, notif, userToken);
   } catch {
@@ -314,6 +353,7 @@ export async function recordNotificationInFirestore(notif: NotificationItem): Pr
 
 export async function recordAuditLogInFirestore(audit: AuditLog): Promise<void> {
   const userToken = getCurrentUserToken();
+  await mysqlInsertAuditLog(audit).catch(() => {});
   try {
     await fsUpsertDoc('auditLogs', audit.id, audit, userToken);
   } catch {
@@ -326,6 +366,9 @@ export async function recordAuditLogInFirestore(audit: AuditLog): Promise<void> 
  * Reconciles deletions so deleted records stay deleted across restarts and deployments.
  */
 export async function initializeFirestoreProductCatalog(): Promise<void> {
+  if (isMysqlActive()) {
+    return;
+  }
   const userToken = getCurrentUserToken();
   try {
     const metaRes = await fsGetDoc('systemSettings/catalog_meta', userToken).catch(() => null);
@@ -503,6 +546,22 @@ export const initializeFirestoreData = initializeFirestoreProductCatalog;
  * Load VTUNaija API credentials and configuration saved in Firestore.
  */
 export async function getFirestoreVTUConfig(): Promise<VTUNaijaConfig> {
+  if (isMysqlActive()) {
+    const mysqlCfg = await mysqlGetSetting<VTUNaijaConfig>('vtu_config').catch(() => null);
+    if (mysqlCfg) {
+      db.vtuNaijaConfig = {
+        ...db.vtuNaijaConfig,
+        ...mysqlCfg,
+        cableVerifyEndpoint: mysqlCfg.cableVerifyEndpoint || '/cablesub/verify/',
+        electricityVerifyEndpoint: mysqlCfg.electricityVerifyEndpoint || '/billpayment/verify/',
+        networkIds: {
+          ...db.vtuNaijaConfig.networkIds,
+          ...(mysqlCfg.networkIds || {}),
+        },
+      };
+      return db.vtuNaijaConfig;
+    }
+  }
   const userToken = getCurrentUserToken();
   try {
     const res = await fsGetDoc('systemSettings/vtu_config', userToken);
@@ -541,6 +600,7 @@ export async function saveFirestoreVTUConfig(config: Partial<VTUNaijaConfig>): P
 
   db.vtuNaijaConfig = merged;
   db.saveToDisk();
+  await mysqlSaveSetting('vtu_config', merged).catch(() => {});
 
   const userToken = getCurrentUserToken();
   try {
@@ -561,6 +621,22 @@ export async function saveFirestoreVTUConfig(config: Partial<VTUNaijaConfig>): P
 }
 
 export async function getFirestoreNCWalletConfig(): Promise<NCWalletConfig> {
+  if (isMysqlActive()) {
+    const mysqlCfg = await mysqlGetSetting<NCWalletConfig>('nc_config').catch(() => null);
+    if (mysqlCfg) {
+      db.ncWalletConfig = {
+        ...db.ncWalletConfig,
+        ...mysqlCfg,
+        cableVerifyEndpoint: mysqlCfg.cableVerifyEndpoint || '/cablesub/verify/',
+        electricityVerifyEndpoint: mysqlCfg.electricityVerifyEndpoint || '/billpayment/verify/',
+        networkIds: {
+          ...db.ncWalletConfig.networkIds,
+          ...(mysqlCfg.networkIds || {}),
+        },
+      };
+      return db.ncWalletConfig;
+    }
+  }
   const userToken = getCurrentUserToken();
   try {
     const res = await fsGetDoc('systemSettings/nc_config', userToken);
@@ -599,6 +675,7 @@ export async function saveFirestoreNCWalletConfig(config: Partial<NCWalletConfig
 
   db.ncWalletConfig = merged;
   db.saveToDisk();
+  await mysqlSaveSetting('nc_config', merged).catch(() => {});
 
   const userToken = getCurrentUserToken();
   try {
@@ -619,6 +696,16 @@ export async function saveFirestoreNCWalletConfig(config: Partial<NCWalletConfig
 }
 
 export async function getFirestoreServiceRouting(): Promise<ServiceRoutingConfig> {
+  if (isMysqlActive()) {
+    const mysqlCfg = await mysqlGetSetting<ServiceRoutingConfig>('service_routing').catch(() => null);
+    if (mysqlCfg) {
+      db.serviceRouting = {
+        ...db.serviceRouting,
+        ...mysqlCfg,
+      };
+      return db.serviceRouting;
+    }
+  }
   const userToken = getCurrentUserToken();
   try {
     const res = await fsGetDoc('systemSettings/service_routing', userToken);
@@ -644,6 +731,7 @@ export async function saveFirestoreServiceRouting(routing: Partial<ServiceRoutin
 
   db.serviceRouting = merged;
   db.saveToDisk();
+  await mysqlSaveSetting('service_routing', merged).catch(() => {});
 
   const userToken = getCurrentUserToken();
   try {

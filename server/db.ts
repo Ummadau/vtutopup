@@ -23,6 +23,15 @@ import {
   ManualFundingConfig,
   ManualFundingRequest
 } from '../src/types/index.ts';
+import {
+  mysqlMarkDeleted,
+  mysqlUnmarkDeleted,
+  mysqlInsertLedgerEntry,
+  mysqlUpsertUser,
+  mysqlUpsertTransaction,
+  mysqlUpsertNotification,
+  mysqlInsertAuditLog,
+} from './mysql.ts';
 
 const DB_FILE_PATH = path.resolve(process.cwd(), 'server', 'persisted_db.json');
 
@@ -184,11 +193,13 @@ class Database {
       this.deletedIds[collection].push(id);
     }
     this.saveToDisk();
+    mysqlMarkDeleted(collection, id).catch(() => {});
   }
 
   unmarkDeleted(collection: keyof DeletedIdsRegistry, id: string) {
     if (!id) return;
     this.deletedIds[collection] = this.deletedIds[collection].filter(x => x !== id);
+    mysqlUnmarkDeleted(collection, id).catch(() => {});
   }
 
   loadFromDisk(): boolean {
@@ -1053,6 +1064,8 @@ class Database {
     };
     this.ledger.push(ledgerEntry);
     this.saveToDisk();
+    mysqlInsertLedgerEntry(ledgerEntry).catch(() => {});
+    mysqlUpsertUser(user).catch(() => {});
 
     return { success: true, balanceAfter };
   }
@@ -1079,6 +1092,8 @@ class Database {
     };
     this.ledger.push(ledgerEntry);
     this.saveToDisk();
+    mysqlInsertLedgerEntry(ledgerEntry).catch(() => {});
+    mysqlUpsertUser(user).catch(() => {});
 
     return { success: true, balanceAfter };
   }
@@ -1101,6 +1116,7 @@ class Database {
       type: 'warning',
     });
     this.saveToDisk();
+    mysqlUpsertTransaction(tx).catch(() => {});
 
     return true;
   }
@@ -1115,6 +1131,7 @@ class Database {
     };
     this.notifications.set(id, full);
     this.saveToDisk();
+    mysqlUpsertNotification(full).catch(() => {});
     return full;
   }
 
@@ -1130,6 +1147,7 @@ class Database {
     };
     this.auditLogs.unshift(audit);
     this.saveToDisk();
+    mysqlInsertAuditLog(audit).catch(() => {});
   }
 }
 

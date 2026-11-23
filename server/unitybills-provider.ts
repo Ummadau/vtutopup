@@ -3,6 +3,7 @@ import { getCurrentUserToken } from './request-context.ts';
 import { UnityBillsConfig, VirtualAccount, User } from '../src/types/index.ts';
 import { db } from './db.ts';
 import { saveUserVirtualAccount } from './billstack-provider.ts';
+import { isMysqlActive, mysqlGetSetting, mysqlSaveSetting } from './mysql.ts';
 
 // Default UnityBills API configuration
 export const defaultUnityBillsConfig: UnityBillsConfig = {
@@ -33,6 +34,17 @@ export const defaultUnityBillsConfig: UnityBillsConfig = {
  * Load UnityBills configuration from Firestore with memory/disk fallback
  */
 export async function getFirestoreUnityBillsConfig(): Promise<UnityBillsConfig> {
+  if (isMysqlActive()) {
+    const mysqlCfg = await mysqlGetSetting<UnityBillsConfig>('unitybills_config').catch(() => null);
+    if (mysqlCfg) {
+      db.unityBillsConfig = {
+        ...defaultUnityBillsConfig,
+        ...db.unityBillsConfig,
+        ...mysqlCfg,
+      };
+      return db.unityBillsConfig;
+    }
+  }
   const userToken = getCurrentUserToken();
   try {
     const res = await fsGetDoc('systemSettings/unitybills_config', userToken);
@@ -57,6 +69,7 @@ export async function saveFirestoreUnityBillsConfig(config: Partial<UnityBillsCo
     lastTested: new Date().toISOString(),
   };
   db.saveToDisk();
+  await mysqlSaveSetting('unitybills_config', db.unityBillsConfig).catch(() => {});
 
   const userToken = getCurrentUserToken();
   try {
