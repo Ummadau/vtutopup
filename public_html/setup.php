@@ -73,7 +73,84 @@ $installSummary = null;
 $testResult = null;
 $selfDeleted = false;
 
-// Handle one-click self-deletion after install
+function isCompiledIndexHtml(string $path): bool
+{
+    if (!is_file($path)) {
+        return false;
+    }
+    $body = (string)@file_get_contents($path);
+    if ($body === '') {
+        return false;
+    }
+    if (preg_match('/<script[^>]+src=["\']\/src\/main\.tsx["\']/i', $body) === 1) {
+        return false;
+    }
+    return preg_match('/<script[^>]+src=["\']\.?\/assets\/[^"\']+\.js["\']/i', $body) === 1;
+}
+
+function copyDirectoryRecursive(string $src, string $dst): bool
+{
+    if (!is_dir($src)) {
+        return false;
+    }
+    if (!is_dir($dst) && !@mkdir($dst, 0755, true)) {
+        return false;
+    }
+    $entries = @scandir($src);
+    if (!is_array($entries)) {
+        return false;
+    }
+    foreach ($entries as $entry) {
+        if ($entry === '.' || $entry === '..') {
+            continue;
+        }
+        $srcPath = $src . DIRECTORY_SEPARATOR . $entry;
+        $dstPath = $dst . DIRECTORY_SEPARATOR . $entry;
+        if (is_dir($srcPath)) {
+            if (!copyDirectoryRecursive($srcPath, $dstPath)) {
+                return false;
+            }
+        } elseif (!@copy($srcPath, $dstPath)) {
+            return false;
+        }
+    }
+    return true;
+}
+
+function findCompiledCandidateDir(string $currentDir): ?string
+{
+    foreach (['public_html', 'dist'] as $sub) {
+        $candidate = $currentDir . DIRECTORY_SEPARATOR . $sub;
+        if (isCompiledIndexHtml($candidate . DIRECTORY_SEPARATOR . 'index.html') && is_dir($candidate . DIRECTORY_SEPARATOR . 'assets')) {
+            return $candidate;
+        }
+    }
+    return null;
+}
+
+function promoteCompiledBundleToCurrent(string $currentDir): ?string
+{
+    $candidate = findCompiledCandidateDir($currentDir);
+    if ($candidate === null) {
+        return null;
+    }
+    $ok = @copy($candidate . DIRECTORY_SEPARATOR . 'index.html', $currentDir . DIRECTORY_SEPARATOR . 'index.html');
+    if (!$ok) {
+        return null;
+    }
+    if (!copyDirectoryRecursive($candidate . DIRECTORY_SEPARATOR . 'assets', $currentDir . DIRECTORY_SEPARATOR . 'assets')) {
+        return null;
+    }
+    foreach (['firebase-messaging-sw.js', 'robots.txt'] as $optionalFile) {
+        $srcOpt = $candidate . DIRECTORY_SEPARATOR . $optionalFile;
+        if (is_file($srcOpt)) {
+            @copy($srcOpt, $currentDir . DIRECTORY_SEPARATOR . $optionalFile);
+        }
+    }
+    return basename($candidate);
+}
+
+// Handle one-click self-deletion or compiled frontend activation
 if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delete_installer') {
     if (!verifyCsrf($_POST['csrf_token'] ?? null)) {
         $flashError = 'Security token mismatch. Please refresh this page and try again.';
@@ -83,6 +160,18 @@ if ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'delet
             $selfDeleted = true;
         } else {
             $flashError = 'Could not delete setup.php automatically due to file permissions. Please delete it manually in cPanel File Manager.';
+        }
+    }
+} elseif ($_SERVER['REQUEST_METHOD'] === 'POST' && ($_POST['action'] ?? '') === 'activate_compiled_bundle') {
+    if (!verifyCsrf($_POST['csrf_token'] ?? null)) {
+        $flashError = 'Security token mismatch. Please refresh this page and try again.';
+    } else {
+        $promotedFrom = promoteCompiledBundleToCurrent($currentDir);
+        if ($promotedFrom !== null) {
+            writeSecurityHtaccess($currentDir);
+            $flashSuccess = 'Activated the compiled production bundle from ./' . $promotedFrom . '/ into this folder! Click "Go to Platform" below.';
+        } else {
+            $flashError = 'Could not find a compiled ./public_html/ or ./dist/ bundle in this directory, or permissions blocked copying. Upload the files inside public_html/ directly here.';
         }
     }
 }
@@ -819,6 +908,7 @@ function writeSecurityHtaccess(string $dir): bool
 # NAEEM DATA SUB / NPay Shared Hosting (public_html) Security, MIME & Routing Rules
 
 Options -Indexes
+DirectoryIndex index.html index.php
 
 <IfModule mod_mime.c>
   AddType application/javascript .js .mjs
@@ -839,6 +929,8 @@ Options -Indexes
 
 <IfModule mod_rewrite.c>
   RewriteEngine On
+
+  RewriteRule ^.+/assets/(.*)$ assets/$1 [L]
 
   RewriteCond %{REQUEST_FILENAME} -f [OR]
   RewriteCond %{REQUEST_FILENAME} -d
@@ -946,6 +1038,9 @@ if (!$isLocked && !$selfDeleted && $_SERVER['REQUEST_METHOD'] === 'POST') {
                     }
 
                     $htaccessWritten = writeSecurityHtaccess($currentDir);
+                    if (!isCompiledIndexHtml($currentDir . DIRECTORY_SEPARATOR . 'index.html')) {
+                        promoteCompiledBundleToCurrent($currentDir);
+                    }
 
                     $lockPayload = json_encode([
                         'installed' => true,
@@ -983,10 +1078,10 @@ $dirWritable = is_writable($currentDir);
 $parentWritable = is_writable($parentDir);
 $indexHtmlPath = $currentDir . DIRECTORY_SEPARATOR . 'index.html';
 $indexHtmlBody = is_file($indexHtmlPath) ? (string)@file_get_contents($indexHtmlPath) : '';
-$isDevStubIndex = strpos($indexHtmlBody, '/src/main.tsx') !== false;
+$isDevStubIndex = preg_match('/<script[^>]+src=["\']\/src\/main\.tsx["\']/i', $indexHtmlBody) === 1;
 $missingBundleFiles = [];
 if ($indexHtmlBody !== '' && !$isDevStubIndex) {
-    if (preg_match_all('/(?:src|href)="(\.?\/assets\/[^"]+)"/i', $indexHtmlBody, $matches)) {
+    if (preg_match_all('/(?:src|href)=["\'](\.?\/assets\/[a-zA-Z0-9_.\-\/]+\.(?:js|mjs|css|png|jpg|jpeg|svg|webp|ico|json))["\']/i', $indexHtmlBody, $matches)) {
         foreach ($matches[1] as $refPath) {
             $rel = ltrim(preg_replace('/^\.\//', '', $refPath), '/');
             if (!is_file($currentDir . DIRECTORY_SEPARATOR . str_replace('/', DIRECTORY_SEPARATOR, $rel))) {
@@ -995,7 +1090,8 @@ if ($indexHtmlBody !== '' && !$isDevStubIndex) {
         }
     }
 }
-$frontendPresent = $indexHtmlBody !== '' && !$isDevStubIndex && is_dir($currentDir . DIRECTORY_SEPARATOR . 'assets') && count($missingBundleFiles) === 0;
+$frontendPresent = isCompiledIndexHtml($indexHtmlPath) && is_dir($currentDir . DIRECTORY_SEPARATOR . 'assets') && count($missingBundleFiles) === 0;
+$compiledCandidateDir = $frontendPresent ? null : findCompiledCandidateDir($currentDir);
 ?>
 <!DOCTYPE html>
 <html lang="en">
@@ -1166,12 +1262,30 @@ $frontendPresent = $indexHtmlBody !== '' && !$isDevStubIndex && is_dir($currentD
 
         <?php if ($isDevStubIndex): ?>
           <div class="alert alert-err" style="margin-top:16px; margin-bottom:0;">
-            <strong>Why the App Is Blank:</strong> <code>index.html</code> in this folder is still the uncompiled source HTML (<code>/src/main.tsx</code>). Replace it with the compiled <code>public_html/index.html</code> and <code>public_html/assets/</code> folder.
+            <strong>Why the App Is Blank:</strong> <code>index.html</code> in this folder is still the uncompiled source HTML (<code>/src/main.tsx</code>).
+            <?php if ($compiledCandidateDir !== null): ?>
+              A compiled bundle was detected in <code>./<?php echo e(basename($compiledCandidateDir)); ?>/</code>. Click <strong>Fix Blank App Now</strong> below to copy the compiled files into this folder automatically.
+            <?php else: ?>
+              Replace it with the compiled <code>public_html/index.html</code> and <code>public_html/assets/</code> folder from the GitHub repository (make sure you upload the files <em>inside</em> <code>public_html/</code>, not the repository root <code>index.html</code>).
+            <?php endif; ?>
           </div>
         <?php elseif (!$frontendPresent): ?>
           <div class="alert alert-err" style="margin-top:16px; margin-bottom:0;">
-            <strong>Why the App Is Blank:</strong> <?php echo count($missingBundleFiles) > 0 ? 'Missing compiled bundle file(s): <code>' . e(implode(', ', $missingBundleFiles)) . '</code>.' : 'Missing compiled <code>index.html</code> or <code>assets/</code> folder.'; ?> Re-upload the matching <code>public_html/index.html</code> and <code>public_html/assets/</code> folder together.
+            <strong>Why the App Is Blank:</strong> <?php echo count($missingBundleFiles) > 0 ? 'Missing compiled bundle file(s): <code>' . e(implode(', ', $missingBundleFiles)) . '</code>.' : 'Missing compiled <code>index.html</code> or <code>assets/</code> folder.'; ?>
+            <?php if ($compiledCandidateDir !== null): ?>
+              Click <strong>Fix Blank App Now</strong> below to copy the compiled files from <code>./<?php echo e(basename($compiledCandidateDir)); ?>/</code> automatically.
+            <?php else: ?>
+              Re-upload the matching <code>public_html/index.html</code> and <code>public_html/assets/</code> folder together.
+            <?php endif; ?>
           </div>
+        <?php endif; ?>
+
+        <?php if ($compiledCandidateDir !== null): ?>
+          <form method="post" class="actions" style="margin-top:12px;">
+            <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>" />
+            <input type="hidden" name="action" value="activate_compiled_bundle" />
+            <button type="submit" class="btn btn-primary">Fix Blank App Now (Activate <?php echo e(basename($compiledCandidateDir)); ?>/ Bundle)</button>
+          </form>
         <?php endif; ?>
 
         <div class="alert alert-warn" style="margin-top:16px; margin-bottom:0;">
@@ -1210,12 +1324,24 @@ $frontendPresent = $indexHtmlBody !== '' && !$isDevStubIndex && is_dir($currentD
         </div>
         <?php if ($isDevStubIndex): ?>
           <div class="alert alert-warn" style="margin-top:12px; margin-bottom:0;">
-            <strong>Blank Index Cause Detected:</strong> Your <code>index.html</code> points to <code>/src/main.tsx</code> (uncompiled source). Replace it with the compiled files inside <code>public_html/</code> (<code>index.html</code> + <code>assets/</code>).
+            <strong>Blank Index Cause Detected:</strong> Your <code>index.html</code> points to <code>/src/main.tsx</code> (uncompiled source).
+            <?php if ($compiledCandidateDir !== null): ?>
+              A compiled bundle was detected in <code>./<?php echo e(basename($compiledCandidateDir)); ?>/</code> — click <strong>Fix Blank App Now</strong> or submit installation to activate it automatically.
+            <?php else: ?>
+              Replace it with the compiled files inside <code>public_html/</code> (<code>index.html</code> + <code>assets/</code>).
+            <?php endif; ?>
           </div>
         <?php elseif (!$frontendPresent): ?>
           <div class="alert alert-warn" style="margin-top:12px; margin-bottom:0;">
-            <strong>Frontend Assets Missing:</strong> Make sure both <code>index.html</code> and the <code>assets/</code> folder from <code>public_html/</code> are uploaded here so the site renders properly.
+            <strong>Frontend Assets Missing:</strong> <?php echo count($missingBundleFiles) > 0 ? 'Missing file(s): <code>' . e(implode(', ', $missingBundleFiles)) . '</code>. ' : ''; ?>Make sure both <code>index.html</code> and the <code>assets/</code> folder from <code>public_html/</code> are uploaded here so the site renders properly.
           </div>
+        <?php endif; ?>
+        <?php if (!$frontendPresent && $compiledCandidateDir !== null): ?>
+          <form method="post" class="actions" style="margin-top:12px;">
+            <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>" />
+            <input type="hidden" name="action" value="activate_compiled_bundle" />
+            <button type="submit" class="btn btn-primary">Fix Blank App Now (Activate <?php echo e(basename($compiledCandidateDir)); ?>/ Bundle)</button>
+          </form>
         <?php endif; ?>
       </div>
 

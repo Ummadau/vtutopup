@@ -1,0 +1,49 @@
+name: Build cPanel public_html Bundle
+
+on:
+  push:
+    branches:
+      - main
+      - master
+    paths-ignore:
+      - 'public_html/assets/**'
+      - 'public_html/index.html'
+  workflow_dispatch:
+
+permissions:
+  contents: write
+
+jobs:
+  build-public-html:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+
+      - name: Setup Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: 'npm'
+
+      - name: Install dependencies
+        run: npm install --legacy-peer-deps
+
+      - name: Build production bundle and populate public_html
+        run: npm run build
+
+      - name: Commit compiled public_html files
+        run: |
+          git config user.name "github-actions[bot]"
+          git config user.email "github-actions[bot]@users.noreply.github.com"
+          git add -f public_html/
+          if ! git diff --cached --quiet; then
+            git commit -m "chore: build compiled public_html bundle and assets"
+            git push
+          fi
+
+      - name: Upload cPanel public_html artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: cpanel-public_html
+          path: public_html/

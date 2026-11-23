@@ -19,8 +19,8 @@ messaging.onBackgroundMessage((payload) => {
   
   const options = {
     body,
-    icon: '/public/assets/aistudio/file_000000008bcc8243a78738db4143d576_09f5ebcf.png',
-    badge: '/public/assets/aistudio/file_000000008bcc8243a78738db4143d576_09f5ebcf.png',
+    icon: '/assets/aistudio/file_000000008bcc8243a78738db4143d576_09f5ebcf.png',
+    badge: '/assets/aistudio/file_000000008bcc8243a78738db4143d576_09f5ebcf.png',
     data: payload.data || {},
   };
 

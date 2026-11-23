@@ -1,0 +1,5 @@
+User-agent: *
+Allow: /
+Disallow: /setup.php
+Disallow: /setup
+Disallow: /api/

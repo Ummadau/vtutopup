@@ -29,8 +29,18 @@ Full-stack Nigerian VTU and digital bills platform built with React, Vite, Tailw
 
 ## cPanel Shared Hosting Deployment (`public_html`)
 
-The `public_html/` folder already contains the compiled static frontend and the automated MySQL installer (`setup.php`):
+If you exported or downloaded the source repository directly from AI Studio without running a build yet, generate or download the compiled `public_html/assets/` folder first:
 
+- **Option A — Automatic via GitHub Actions (Recommended after GitHub export):**
+  Once pushed to GitHub, `.github/workflows/build-public-html.yml` automatically runs `npm run build`, commits the compiled `public_html/index.html` and `public_html/assets/` (including `assets/aistudio/`), and creates a downloadable **`cpanel-public_html`** ZIP artifact under the **Actions** tab.
+- **Option B — Build Locally:**
+  ```bash
+  npm install --legacy-peer-deps
+  npm run build
+  ```
+  Vite compiles the app and copies `index.html`, `assets/` (JS, CSS, and `aistudio/` media), `setup.php`, `robots.txt`, and `firebase-messaging-sw.js` directly into `public_html/`.
+
+Then deploy to cPanel:
 1. Upload the **contents inside `public_html/`** (`index.html`, `assets/`, `firebase-messaging-sw.js`, `robots.txt`, `.htaccess`, and `setup.php`) into your cPanel `public_html` directory.
 2. Open `https://yourdomain.com/setup.php` in your browser.
 3. Enter your cPanel MySQL database credentials (`localhost`, DB name, DB username, DB password) and Super Admin details, then click **Install System & Create All Database Tables**.
