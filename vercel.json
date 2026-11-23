@@ -1,6 +1,8 @@
 {
   "version": 2,
+  "framework": "vite",
   "buildCommand": "npm run build",
+  "outputDirectory": "dist",
   "installCommand": "npm install --legacy-peer-deps",
   "functions": {
     "api/index.js": {
@@ -23,6 +25,10 @@
     {
       "source": "/api/(.*)",
       "destination": "/api"
+    },
+    {
+      "source": "/(.*)/assets/(.*)",
+      "destination": "/assets/$2"
     },
     {
       "source": "/((?!api/|hooks/|webhooks/).*)",

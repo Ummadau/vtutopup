@@ -840,6 +840,8 @@ Options -Indexes
 <IfModule mod_rewrite.c>
   RewriteEngine On
 
+  RewriteRule ^.+/assets/(.*)$ assets/$1 [L]
+
   RewriteCond %{REQUEST_FILENAME} -f [OR]
   RewriteCond %{REQUEST_FILENAME} -d
   RewriteRule ^ - [L]

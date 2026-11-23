@@ -23,6 +23,9 @@ Options -Indexes
 <IfModule mod_rewrite.c>
   RewriteEngine On
 
+  # Normalize nested SPA route requests for ./assets/...
+  RewriteRule ^.+/assets/(.*)$ assets/$1 [L]
+
   # Allow existing static files, assets, and PHP scripts directly
   RewriteCond %{REQUEST_FILENAME} -f [OR]
   RewriteCond %{REQUEST_FILENAME} -d

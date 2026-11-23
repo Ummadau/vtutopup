@@ -1,0 +1,45 @@
+# Root Apache (.htaccess) safeguard for cPanel / shared hosting
+# If the full repository is cloned or extracted directly into a web root,
+# route web traffic to the compiled public_html/ bundle and block source/secret files.
+
+Options -Indexes
+
+<IfModule mod_mime.c>
+  AddType application/javascript .js .mjs
+  AddType text/css .css
+  AddType application/json .json
+</IfModule>
+
+# Block direct HTTP access to sensitive configuration, backend code, and source files
+<FilesMatch "^(\.env.*|\.install\.lock|persisted_db\.json|package(-lock)?\.json|bun\.lock|tsconfig\.json|vercel\.json|vite\.config\.ts|server\.ts|firebase-.*\.json|firestore\.rules|.*\.sql|.*\.ts|.*\.tsx)$">
+  <IfModule mod_authz_core.c>
+    Require all denied
+  </IfModule>
+  <IfModule !mod_authz_core.c>
+    Order allow,deny
+    Deny from all
+  </IfModule>
+</FilesMatch>
+
+<IfModule mod_rewrite.c>
+  RewriteEngine On
+
+  # Block HTTP access to backend/source directories if uploaded to web root
+  RewriteRule ^(src|server|api|database|dist|node_modules|\.git)(/|$) - [F,L]
+
+  # Allow direct handling once rewritten into public_html/
+  RewriteRule ^public_html/ - [L]
+
+  # Serve compiled production app instead of raw Vite source index.html
+  RewriteRule ^$ public_html/index.html [L]
+  RewriteRule ^setup\.php$ public_html/setup.php [L]
+  RewriteRule ^robots\.txt$ public_html/robots.txt [L]
+  RewriteRule ^firebase-messaging-sw\.js$ public_html/firebase-messaging-sw.js [L]
+  RewriteRule ^assets/(.*)$ public_html/assets/$1 [L]
+  RewriteRule ^.+/assets/(.*)$ public_html/assets/$1 [L]
+
+  # Fallback any non-file SPA routes to the compiled production entry
+  RewriteCond %{REQUEST_FILENAME} !-f
+  RewriteCond %{REQUEST_FILENAME} !-d
+  RewriteRule ^ public_html/index.html [L]
+</IfModule>
