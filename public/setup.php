@@ -1324,12 +1324,24 @@ $compiledCandidateDir = $frontendPresent ? null : findCompiledCandidateDir($curr
         </div>
         <?php if ($isDevStubIndex): ?>
           <div class="alert alert-warn" style="margin-top:12px; margin-bottom:0;">
-            <strong>Blank Index Cause Detected:</strong> Your <code>index.html</code> points to <code>/src/main.tsx</code> (uncompiled source). Replace it with the compiled files inside <code>public_html/</code> (<code>index.html</code> + <code>assets/</code>).
+            <strong>Blank Index Cause Detected:</strong> Your <code>index.html</code> points to <code>/src/main.tsx</code> (uncompiled source).
+            <?php if ($compiledCandidateDir !== null): ?>
+              A compiled bundle was detected in <code>./<?php echo e(basename($compiledCandidateDir)); ?>/</code> — click <strong>Fix Blank App Now</strong> or submit installation to activate it automatically.
+            <?php else: ?>
+              Replace it with the compiled files inside <code>public_html/</code> (<code>index.html</code> + <code>assets/</code>).
+            <?php endif; ?>
           </div>
         <?php elseif (!$frontendPresent): ?>
           <div class="alert alert-warn" style="margin-top:12px; margin-bottom:0;">
-            <strong>Frontend Assets Missing:</strong> Make sure both <code>index.html</code> and the <code>assets/</code> folder from <code>public_html/</code> are uploaded here so the site renders properly.
+            <strong>Frontend Assets Missing:</strong> <?php echo count($missingBundleFiles) > 0 ? 'Missing file(s): <code>' . e(implode(', ', $missingBundleFiles)) . '</code>. ' : ''; ?>Make sure both <code>index.html</code> and the <code>assets/</code> folder from <code>public_html/</code> are uploaded here so the site renders properly.
           </div>
+        <?php endif; ?>
+        <?php if (!$frontendPresent && $compiledCandidateDir !== null): ?>
+          <form method="post" class="actions" style="margin-top:12px;">
+            <input type="hidden" name="csrf_token" value="<?php echo e($csrfToken); ?>" />
+            <input type="hidden" name="action" value="activate_compiled_bundle" />
+            <button type="submit" class="btn btn-primary">Fix Blank App Now (Activate <?php echo e(basename($compiledCandidateDir)); ?>/ Bundle)</button>
+          </form>
         <?php endif; ?>
       </div>
 
